@@ -159,6 +159,33 @@ async function handleHistoryPage() {
         }
     };
 
+    const approveAllReportsBtn = document.getElementById('approveAllReportsBtn');
+    const updateApproveAllReportsButton = () => {
+        const role = String(currentUser?.role || '').toLowerCase();
+        approveAllReportsBtn?.classList.toggle('d-none', role !== 'admin' && role !== 'manager');
+    };
+    approveAllReportsBtn?.addEventListener('click', async () => {
+        if (!confirm('سيتم اعتماد جميع التقارير قيد المراجعة ضمن نطاقك الحالي. التقارير المرفوضة لن تتغير. هل تريد المتابعة؟')) return;
+        const original = approveAllReportsBtn.innerHTML;
+        approveAllReportsBtn.disabled = true;
+        approveAllReportsBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin me-1"></i>جاري الاعتماد...';
+        try {
+            const targetUserId = document.getElementById('historyEmployeeFilterSelect')?.value || '';
+            const result = await apiPost('approveAllReports', { role: currentUser.role || '', targetUserId });
+            if (!result || result.status !== 'success') throw new Error(result?.message || 'تعذر اعتماد التقارير');
+            alert(result.message || `تم اعتماد ${result.approved || 0} تقرير.`);
+            const fresh = await cachedReportsFetch({ userId:String(currentUser.id||''), role:String(currentUser.role||''), userName:String(currentUser.name||''), targetUserId:targetUserId || 'all' }, { force:true });
+            currentReports = Array.isArray(fresh) ? fresh : currentReports;
+            renderReports(currentReports);
+        } catch (e) {
+            alert(`تعذر اعتماد الكل: ${e.message || e}`);
+        } finally {
+            approveAllReportsBtn.disabled = false;
+            approveAllReportsBtn.innerHTML = original;
+        }
+    });
+    updateApproveAllReportsButton();
+
     const renderReports = (reportsToRender) => {
         reportsAccordion.innerHTML = '';
         if (typeof populateFilterOptions === 'function') populateFilterOptions();

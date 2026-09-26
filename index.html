@@ -521,7 +521,7 @@
                                 <div id="historyEmployeeFilterWrap" class="d-none">
                                     <select id="historyEmployeeFilterSelect" class="form-select form-select-sm" style="min-width:190px;"></select>
                                 </div>
-                                <span id="reportsCount" class="badge bg-primary fs-6">0 تقرير</span><div class="search-bar"><input type="text" id="searchInput" class="form-control form-control-sm" placeholder="ابحث في تقاريرك..."><i class="fa fa-search"></i></div>
+                                <span id="reportsCount" class="badge bg-primary fs-6">0 تقرير</span><button type="button" class="btn btn-sm btn-success d-none" id="approveAllReportsBtn"><i class="fa-solid fa-check-double me-1"></i>اعتماد الكل</button><div class="search-bar"><input type="text" id="searchInput" class="form-control form-control-sm" placeholder="ابحث في تقاريرك..."><i class="fa fa-search"></i></div>
                                 <button type="button" class="btn btn-sm btn-outline-success" id="exportHistoryCSV" title="تصدير التقارير إلى CSV"><i class="fa-solid fa-file-csv me-1"></i>تصدير CSV</button>
                                 <button type="button" class="btn btn-sm btn-outline-success" id="exportHistoryXLSX" title="تصدير التقارير إلى Excel"><i class="fa-solid fa-file-excel me-1"></i>تصدير Excel</button>
                             </div>
@@ -650,10 +650,19 @@
                                 <i class="fa-solid fa-chevron-up collapse-icon"></i>
                             </div>
                             <div id="collapseMovementHistory" class="collapse show">
+                                <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 p-2 border-bottom">
+                                    <select id="movementApprovalFilter" class="form-select form-select-sm" style="max-width:220px;">
+                                        <option value="">كل حالات المراجعة</option>
+                                        <option value="approved">معتمد</option>
+                                        <option value="rejected">مرفوض</option>
+                                        <option value="pending">قيد المراجعة</option>
+                                    </select>
+                                    <span id="movementCount" class="badge bg-primary">0 حركة</span><button type="button" class="btn btn-sm btn-success d-none" id="approveAllMovementsBtn"><i class="fa-solid fa-check-double me-1"></i>اعتماد الكل</button>
+                                </div>
                                 <div class="table-responsive">
                                     <table class="table table-sm table-bordered mb-0">
                                         <thead class="table-light">
-                                            <tr><th>المادة</th><th>الكمية</th><th>رقم الفاتورة</th><th>العملية</th><th>التاريخ</th><th>التقرير</th><th>المستخدم</th><th id="movementReviewHead" class="d-none">المراجعة</th></tr>
+                                            <tr><th>المادة</th><th>الكمية</th><th>رقم الفاتورة</th><th>العملية</th><th>التاريخ</th><th>التقرير</th><th>المستخدم</th><th>المراجعة</th></tr>
                                         </thead>
                                         <tbody id="movement-history-body">
                                             <tr><td colspan="7" class="text-center text-muted">لا توجد حركات مسجلة بعد</td></tr>
@@ -736,6 +745,54 @@
                         </div>
                     </div>
                 </div>
+
+                <!-- MODAL FOR EDITING A NON-APPROVED MOVEMENT (OWNER / REVIEWER) -->
+                <div class="modal fade" id="movementEditModal" tabindex="-1" aria-labelledby="movementEditModalLabel" aria-hidden="true">
+                    <div class="modal-dialog modal-dialog-centered">
+                        <div class="modal-content">
+                            <div class="modal-header">
+                                <h5 class="modal-title" id="movementEditModalLabel">تعديل حركة سحب/مرتجع</h5>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                            </div>
+                            <div class="modal-body">
+                                <input type="hidden" id="movementEditId">
+                                <div class="mb-3"><label class="form-label fw-bold">اسم المادة</label><input type="text" id="movementEditItem" class="form-control" maxlength="200"></div>
+                                <div class="row g-3">
+                                    <div class="col-md-4"><label class="form-label fw-bold">الكمية</label><input type="number" id="movementEditQuantity" class="form-control" min="1" step="1"></div>
+                                    <div class="col-md-4"><label class="form-label fw-bold">نوع العملية</label><select id="movementEditOperation" class="form-select"><option value="سحب">سحب</option><option value="مرتجع">مرتجع</option></select></div>
+                                    <div class="col-md-4"><label class="form-label fw-bold">رقم الفاتورة</label><input type="text" id="movementEditInvoice" class="form-control"></div>
+                                </div>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">إلغاء</button>
+                                <button type="button" class="btn btn-primary" id="saveMovementEditBtn"><i class="fa-solid fa-check me-1"></i> حفظ التعديل</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- MODAL FOR EDITING A NON-APPROVED ATTENDANCE RECORD (OWNER / REVIEWER) -->
+                <div class="modal fade" id="attendanceEditModal" tabindex="-1" aria-labelledby="attendanceEditModalLabel" aria-hidden="true">
+                    <div class="modal-dialog modal-dialog-centered">
+                        <div class="modal-content">
+                            <div class="modal-header">
+                                <h5 class="modal-title" id="attendanceEditModalLabel">تعديل سجل دوام</h5>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                            </div>
+                            <div class="modal-body">
+                                <input type="hidden" id="attendanceEditTimestamp">
+                                <input type="hidden" id="attendanceEditUsername">
+                                <div class="mb-3"><label class="form-label fw-bold">حالة الدوام</label><select id="attendanceEditStatus" class="form-select"></select></div>
+                                <div class="mb-3"><label class="form-label fw-bold">بيان الدوام</label><input id="attendanceEditStatement" class="form-control" maxlength="250" required></div>
+                                <div class="mb-3"><label class="form-label fw-bold">الملاحظات</label><textarea id="attendanceEditNotes" class="form-control" rows="2" maxlength="500"></textarea></div>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">إلغاء</button>
+                                <button type="button" class="btn btn-primary" id="saveAttendanceEditBtn"><i class="fa-solid fa-check me-1"></i> حفظ التعديل</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </section>
 
             <!-- ==================== شاشة الدوام ==================== -->
@@ -761,13 +818,14 @@
                     <div class="card history-card">
                         <div class="card-header bg-white d-flex flex-wrap justify-content-between align-items-center gap-2">
                             <h5 class="mb-0"><i class="fa-solid fa-list-check me-2"></i> سجل الدوام</h5>
-                            <div class="d-flex gap-2">
+                            <div class="d-flex gap-2 flex-wrap">
                                 <div id="attendanceEmployeeFilterWrap" class="d-none"><select id="attendanceEmployeeFilter" class="form-select form-select-sm"></select></div>
                                 <select id="attendanceFilterStatus" class="form-select form-select-sm"><option value="">كل الحالات</option></select>
-                                <span id="attendanceCount" class="badge bg-primary">0 سجل</span>
+                                <select id="attendanceApprovalFilter" class="form-select form-select-sm"><option value="">كل حالات المراجعة</option><option value="approved">معتمد</option><option value="rejected">مرفوض</option><option value="pending">قيد المراجعة</option></select>
+                                <span id="attendanceCount" class="badge bg-primary">0 سجل</span><button type="button" class="btn btn-sm btn-success d-none" id="approveAllAttendanceBtn"><i class="fa-solid fa-check-double me-1"></i>اعتماد الكل</button>
                             </div>
                         </div>
-                        <div class="table-responsive"><table class="table table-bordered table-hover mb-0"><thead class="table-light"><tr><th>Timestamp</th><th>Username</th><th>حالة الدوام</th><th>بيان الدوام</th><th>الملاحظات</th><th>التقرير الطبي</th><th id="attendanceReviewHead" class="d-none">المراجعة</th></tr></thead><tbody id="attendance-table-body"></tbody></table></div>
+                        <div class="table-responsive"><table class="table table-bordered table-hover mb-0"><thead class="table-light"><tr><th>Timestamp</th><th>Username</th><th>حالة الدوام</th><th>بيان الدوام</th><th>الملاحظات</th><th>التقرير الطبي</th><th>المراجعة</th></tr></thead><tbody id="attendance-table-body"></tbody></table></div>
                     </div>
                 </div>
             </section>

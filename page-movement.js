@@ -187,7 +187,27 @@ async function handleMaterialsMovementPage() {
     // V66: اعتماد/رفض حركة سحب/مرتجع — admin/manager/auditor.
     const movRole = String(currentUser.role || '').trim().toLowerCase();
     const canReviewMov = movRole === 'admin' || movRole === 'manager' || movRole === 'auditor';
-    if (canReviewMov) document.getElementById('movementReviewHead')?.classList.remove('d-none');
+    const approveAllMovementsBtn = document.getElementById('approveAllMovementsBtn');
+    if (approveAllMovementsBtn) approveAllMovementsBtn.classList.toggle('d-none', movRole !== 'admin' && movRole !== 'manager');
+    approveAllMovementsBtn?.addEventListener('click', async () => {
+        if (!confirm('سيتم اعتماد جميع الحركات قيد المراجعة ضمن نطاقك الحالي. الحركات المرفوضة لن تتغير. هل تريد المتابعة؟')) return;
+        const original = approveAllMovementsBtn.innerHTML;
+        approveAllMovementsBtn.disabled = true;
+        approveAllMovementsBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin me-1"></i>جاري الاعتماد...';
+        try {
+            const targetUserId = employeeFilterSelect?.value || '';
+            const result = await apiPost('approveAllMovements', { role: currentUser.role || '', targetUserId });
+            if (!result || result.status !== 'success') throw new Error(result?.message || 'تعذر اعتماد الحركات');
+            showToast(result.message || `تم اعتماد ${result.approved || 0} حركة.`);
+            await refreshMovementsAndSummary(viewingTargetId);
+        } catch (e) {
+            showToast(`تعذر اعتماد الكل: ${e.message || e}`, true);
+        } finally {
+            approveAllMovementsBtn.disabled = false;
+            approveAllMovementsBtn.innerHTML = original;
+        }
+    });
+
     const reviewMovement = async (button, id, status) => {
         try {
             const rejectReason = status === 'rejected' ? (window.prompt('سبب رفض الحركة:') || '').trim() : '';
@@ -207,6 +227,104 @@ async function handleMaterialsMovementPage() {
         }
     };
 
+    // -----------------------------------------------------------------
+    // سجل الحركات + محصلتي — مع فلتر حالة المراجعة (الكل/معتمد/مرفوض/قيد المراجعة).
+    // -----------------------------------------------------------------
+    const movementApprovalFilter = document.getElementById('movementApprovalFilter');
+    const movementCountSpan = document.getElementById('movementCount');
+    let allMovements = [];
+
+    const movementApprovalOf = (m) => m.approvalStatus === 'approved' ? 'approved' : (m.approvalStatus === 'rejected' ? 'rejected' : 'pending');
+
+    function renderMovementHistory() {
+        const f = (movementApprovalFilter && movementApprovalFilter.value) || '';
+        const filtered = f ? allMovements.filter(m => movementApprovalOf(m) === f) : allMovements;
+        if (movementCountSpan) movementCountSpan.textContent = `${filtered.length} حركة`;
+        if (!allMovements.length) {
+            movementHistoryBody.innerHTML = `<tr><td colspan="8" class="text-center text-muted">لا توجد حركات مسجلة بعد</td></tr>`;
+            return;
+        }
+        movementHistoryBody.innerHTML = filtered.length ? filtered.map(m => {
+            const badge = m.approvalStatus === 'approved' ? '<span class="badge bg-success">معتمد</span>' : (m.approvalStatus === 'rejected' ? '<span class="badge bg-danger">مرفوض</span>' : '<span class="badge bg-secondary">قيد المراجعة</span>');
+            const canEditThis = m.approvalStatus === 'rejected' && (isViewingSelf() || canReviewMov);
+            const review = `<span class="d-inline-block me-2">${badge}</span>` +
+                (canEditThis ? `<button class="btn btn-sm btn-outline-primary edit-move-btn" data-id="${escapeHtmlSafe(m.id)}" data-item="${escapeHtmlSafe(m.item)}" data-qty="${m.quantity}" data-op="${escapeHtmlSafe(m.operation)}" data-inv="${escapeHtmlSafe(m.invoiceNumber)}" title="تعديل الحركة المرفوضة"><i class="fa-solid fa-pen"></i></button> ` : '') +
+                (canReviewMov && m.approvalStatus !== 'approved' ? `<button class="btn btn-sm btn-outline-success approve-move-btn" data-id="${escapeHtmlSafe(m.id)}" title="اعتماد الحركة"><i class="fa-solid fa-check"></i></button> ` : '') +
+                (canReviewMov && m.approvalStatus !== 'rejected' ? `<button class="btn btn-sm btn-outline-danger reject-move-btn" data-id="${escapeHtmlSafe(m.id)}" title="رفض الحركة"><i class="fa-solid fa-ban"></i></button>` : '');
+            return `<tr><td>${escapeHtmlSafe(m.item)}</td><td>${escapeHtmlSafe(m.quantity)}</td><td>${m.invoiceNumber ? escapeHtmlSafe(m.invoiceNumber) : '-'}</td><td>${operationBadge(m.operation)}</td><td>${escapeHtmlSafe(m.date)}</td><td>${m.reportId ? escapeHtmlSafe(m.reportId) : '-'}</td><td>${escapeHtmlSafe(m.createdByName) || '-'}</td><td class="text-nowrap">${review}</td></tr>`;
+        }).join('') : `<tr><td colspan="8" class="text-center text-muted">لا توجد حركات مطابقة للفلتر</td></tr>`;
+        movementHistoryBody.querySelectorAll('.approve-move-btn').forEach(b => b.addEventListener('click', () => reviewMovement(b, b.dataset.id, 'approved')));
+        movementHistoryBody.querySelectorAll('.reject-move-btn').forEach(b => b.addEventListener('click', () => reviewMovement(b, b.dataset.id, 'rejected')));
+        movementHistoryBody.querySelectorAll('.edit-move-btn').forEach(b => b.addEventListener('click', () => openMovementEdit(b)));
+    }
+
+    // V69: تعديل حركة غير معتمدة (المرفوضة/قيد المراجعة) — المعتمدة لا تُعدَّل.
+    const movementEditModalEl = document.getElementById('movementEditModal');
+    const movementEditModal = movementEditModalEl ? new bootstrap.Modal(movementEditModalEl) : null;
+    const movementEditIdEl = document.getElementById('movementEditId');
+    const movementEditItemEl = document.getElementById('movementEditItem');
+    const movementEditQuantityEl = document.getElementById('movementEditQuantity');
+    const movementEditOperationEl = document.getElementById('movementEditOperation');
+    const movementEditInvoiceEl = document.getElementById('movementEditInvoice');
+    const saveMovementEditBtn = document.getElementById('saveMovementEditBtn');
+
+    const openMovementEdit = (button) => {
+        if (!movementEditModal) return;
+        movementEditIdEl.value = button.dataset.id || '';
+        movementEditItemEl.value = button.dataset.item || '';
+        movementEditQuantityEl.value = button.dataset.qty || '';
+        movementEditOperationEl.value = button.dataset.op || 'سحب';
+        movementEditInvoiceEl.value = button.dataset.inv || '';
+        movementEditModal.show();
+    };
+
+    saveMovementEditBtn?.addEventListener('click', async () => {
+        const id = String(movementEditIdEl?.value || '').trim();
+        const item = String(movementEditItemEl?.value || '').trim();
+        const quantity = Number(movementEditQuantityEl?.value);
+        const operation = String(movementEditOperationEl?.value || '').trim();
+        const invoiceNumber = String(movementEditInvoiceEl?.value || '').trim();
+        if (!id) { showToast('معرّف الحركة مفقود.', true); return; }
+        if (!item) { showToast('اسم المادة مطلوب.', true); return; }
+        if (!Number.isFinite(quantity) || quantity <= 0) { showToast('الكمية يجب أن تكون رقماً أكبر من 0.', true); return; }
+        saveMovementEditBtn.disabled = true;
+        const originalText = saveMovementEditBtn.innerHTML;
+        saveMovementEditBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin me-1"></i> جاري الحفظ...';
+        try {
+            const result = await apiPost('editFestivalMovement', { id, item, quantity, operation, invoiceNumber, createdById: String(currentUser.id || ''), createdByName: String(currentUser.name || '') });
+            if (!result || result.status !== 'success') throw new Error(result?.message || 'فشل تعديل الحركة');
+            showToast(result.message || 'تم تعديل الحركة وأصبحت قيد المراجعة.');
+            movementEditModal.hide();
+            await refreshMovementsAndSummary(viewingTargetId);
+        } catch (e) {
+            showToast(`تعذر تعديل الحركة: ${e.message || e}\n\nتأكد من نشر النسخة المحدّثة من Apps Script.`, true);
+        } finally {
+            saveMovementEditBtn.disabled = false;
+            saveMovementEditBtn.innerHTML = originalText;
+        }
+    });
+
+    function renderInventorySummary() {
+        if (!allMovements.length) {
+            inventorySummaryBody.innerHTML = `<tr><td colspan="6" class="text-center text-muted">لا توجد بيانات بعد</td></tr>`;
+            return;
+        }
+        const summaryMap = new Map();
+        allMovements.forEach(m => {
+            if (!summaryMap.has(m.item)) summaryMap.set(m.item, { item: m.item, withdrawn: 0, returned: 0, expensed: 0, sold: 0 });
+            const entry = summaryMap.get(m.item);
+            const qty = Number(m.quantity) || 0;
+            if (m.operation === 'سحب') entry.withdrawn += qty;
+            else if (m.operation === 'مرتجع') entry.returned += qty;
+            else if (m.operation === 'صرف') entry.expensed += qty;
+            else if (m.operation === 'مبيعات') entry.sold += qty;
+        });
+        const summary = Array.from(summaryMap.values()).map(e => ({ ...e, remaining: e.withdrawn - e.returned - e.expensed - e.sold }));
+        inventorySummaryBody.innerHTML = summary.map(e =>
+            `<tr><td>${escapeHtmlSafe(e.item)}</td><td>${e.withdrawn}</td><td>${e.returned}</td><td>${e.expensed}</td><td>${e.sold}</td><td class="fw-bold ${e.remaining < 0 ? 'text-danger' : ''}">${e.remaining}</td></tr>`
+        ).join('');
+    }
+
     async function refreshMovementsAndSummary(targetId) {
         const scopedUserId = String(targetId || viewingTargetId || currentUser.id || '');
         movementHistoryBody.innerHTML = `<tr><td colspan="8" class="text-center text-muted"><i class="fa-solid fa-spinner fa-spin me-1"></i> جاري التحميل...</td></tr>`;
@@ -218,45 +336,17 @@ async function handleMaterialsMovementPage() {
                 targetUserId: scopedUserId
             });
             if (!result || result.status !== 'success') throw new Error(result?.message || 'تعذر تحميل الحركات');
-            const movements = Array.isArray(result.movements) ? result.movements : [];
-
-            if (!movements.length) {
-                movementHistoryBody.innerHTML = `<tr><td colspan="8" class="text-center text-muted">لا توجد حركات مسجلة بعد</td></tr>`;
-                inventorySummaryBody.innerHTML = `<tr><td colspan="6" class="text-center text-muted">لا توجد بيانات بعد</td></tr>`;
-                return;
-            }
-
-            movementHistoryBody.innerHTML = movements.map(m => {
-                const review = canReviewMov ? (
-                    `<span class="d-inline-block me-2">${m.approvalStatus === 'approved' ? '<span class="badge bg-success">معتمد</span>' : (m.approvalStatus === 'rejected' ? '<span class="badge bg-danger">مرفوض</span>' : '<span class="badge bg-secondary">قيد المراجعة</span>')}</span>` +
-                    (m.approvalStatus !== 'approved' ? `<button class="btn btn-sm btn-outline-success approve-move-btn" data-id="${escapeHtmlSafe(m.id)}" title="اعتماد الحركة"><i class="fa-solid fa-check"></i></button> ` : '') +
-                    (m.approvalStatus !== 'rejected' ? `<button class="btn btn-sm btn-outline-danger reject-move-btn" data-id="${escapeHtmlSafe(m.id)}" title="رفض الحركة"><i class="fa-solid fa-ban"></i></button>` : '')
-                ) : '';
-                return `<tr><td>${escapeHtmlSafe(m.item)}</td><td>${escapeHtmlSafe(m.quantity)}</td><td>${m.invoiceNumber ? escapeHtmlSafe(m.invoiceNumber) : '-'}</td><td>${operationBadge(m.operation)}</td><td>${escapeHtmlSafe(m.date)}</td><td>${m.reportId ? escapeHtmlSafe(m.reportId) : '-'}</td><td>${escapeHtmlSafe(m.createdByName) || '-'}</td><td class="text-nowrap">${review}</td></tr>`;
-            }).join('');
-            movementHistoryBody.querySelectorAll('.approve-move-btn').forEach(b => b.addEventListener('click', () => reviewMovement(b, b.dataset.id, 'approved')));
-            movementHistoryBody.querySelectorAll('.reject-move-btn').forEach(b => b.addEventListener('click', () => reviewMovement(b, b.dataset.id, 'rejected')));
-
-            const summaryMap = new Map();
-            movements.forEach(m => {
-                if (!summaryMap.has(m.item)) summaryMap.set(m.item, { item: m.item, withdrawn: 0, returned: 0, expensed: 0, sold: 0 });
-                const entry = summaryMap.get(m.item);
-                const qty = Number(m.quantity) || 0;
-                if (m.operation === 'سحب') entry.withdrawn += qty;
-                else if (m.operation === 'مرتجع') entry.returned += qty;
-                else if (m.operation === 'صرف') entry.expensed += qty;
-                else if (m.operation === 'مبيعات') entry.sold += qty;
-            });
-
-            const summary = Array.from(summaryMap.values()).map(e => ({ ...e, remaining: e.withdrawn - e.returned - e.expensed - e.sold }));
-            inventorySummaryBody.innerHTML = summary.map(e =>
-                `<tr><td>${escapeHtmlSafe(e.item)}</td><td>${e.withdrawn}</td><td>${e.returned}</td><td>${e.expensed}</td><td>${e.sold}</td><td class="fw-bold ${e.remaining < 0 ? 'text-danger' : ''}">${e.remaining}</td></tr>`
-            ).join('');
+            allMovements = Array.isArray(result.movements) ? result.movements : [];
+            renderMovementHistory();
+            renderInventorySummary();
         } catch (e) {
             movementHistoryBody.innerHTML = `<tr><td colspan="8" class="text-center text-danger">تعذر تحميل السجل: ${escapeHtmlSafe(e.message || '')}</td></tr>`;
             inventorySummaryBody.innerHTML = `<tr><td colspan="6" class="text-center text-danger">تعذر تحميل المحصلة</td></tr>`;
         }
     }
+
+    // تغيير فلتر حالة المراجعة يعيد رسم السجل فوراً دون إعادة الجلب.
+    movementApprovalFilter?.addEventListener('change', () => { if (allMovements.length) renderMovementHistory(); });
 
     // -----------------------------------------------------------------
     // إرسال صافي المحصلة إلى المبيعات — يختار المستخدم التقرير أولاً.

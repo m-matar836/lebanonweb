@@ -135,7 +135,7 @@ function forceLogout(message) {
     navigateTo('login');
 }
 
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbz5litYpMWlD6WiasjK4yNNaMrPG7i8yzYVe9KTj1T7eBGgtY4KmETBVgyDvYwP4uIi/exec";
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwXtzdCpFD-1dU7DLan2oP_Am6UUq8D1_ySx-r4IFAGIw_bBJ3oh6zxzFhDWBbFCF5b/exec";
 const CACHE_DURATION_MINUTES = 1440;
 const FORM_STATE_KEY = 'reportFormLastState'; 
 const EDIT_STATE_KEY = 'reportToEdit';
@@ -876,11 +876,12 @@ function bindShellUserControls() {
     }
     // V42/V50: التحليلات للمشرف والمدير والمدقق فقط.
     const role = String(user.role || '').trim().toLowerCase();
-    const showDashboard = ['admin', 'manager', 'auditor'].includes(role);
+    // V69: التحليلات للمدير (manager) والإداري (admin) فقط — مخفية تماماً عن بقية الأدوار.
+    const showDashboard = role === 'admin' || role === 'manager';
     document.querySelectorAll('.nav-link-dashboard').forEach(el => { const it = el.closest('.nav-item'); if (it) it.style.display = showDashboard ? '' : 'none'; });
-    // V46: المروج يرى رابط الدوام فقط.
+    // V46: المروج يرى رابط الدوام فقط (دون شمل dashboard — تُدار وحدها بقاعدة showDashboard لأي دور).
     const isPromoter = isPromoterAccount(user);
-    document.querySelectorAll('.nav-link-reports, .nav-link-history, .nav-link-movement, .nav-link-dashboard').forEach(el => { const it = el.closest('.nav-item'); if (it) it.style.display = isPromoter ? 'none' : ''; });
+    document.querySelectorAll('.nav-link-reports, .nav-link-history, .nav-link-movement').forEach(el => { const it = el.closest('.nav-item'); if (it) it.style.display = isPromoter ? 'none' : ''; });
     // V68: إدارة المستخدمين للإداري (admin) فقط — تُشغَّل بعد القاعدة أعلاه حتى لا يُعاد إظهارها لغير الإداري.
     document.querySelectorAll('.nav-link-users').forEach(el => { const it = el.closest('.nav-item'); if (it) it.style.display = role === 'admin' ? '' : 'none'; });
     shellControlsBound = true;
@@ -896,6 +897,11 @@ function activateRoute() {
     else if (user && isPromoterAccount(user) && route !== 'attendance') { navigateTo('attendance'); return; }
     // V68: شاشة إدارة المستخدمين للإداري (admin) فقط.
     else if (user && String(user.role || '').trim().toLowerCase() !== 'admin' && route === 'users') { navigateHome(); return; }
+    // V69: التحليلات للمدير (manager) والإداري (admin) فقط — منع الدخول المباشر لغيرهم.
+    else if (user && route === 'dashboard') {
+        const role = String(user.role || '').trim().toLowerCase();
+        if (role !== 'admin' && role !== 'manager') { navigateHome(); return; }
+    }
 
     currentRoute = route;
     const isLogin = route === 'login';
