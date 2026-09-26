@@ -30,24 +30,12 @@ async function addLocationToSheet(type, value, governorate = '', region = '') {
     if (!cleanValue) throw new Error('يرجى إدخال القيمة الجديدة.');
     if (!navigator.onLine) throw new Error('إضافة بيانات جديدة تحتاج إلى اتصال بالإنترنت.');
 
-    const payload = {
-        action: 'addLocation',
-        payload: {
-            type,
-            value: cleanValue,
-            governorate: String(governorate ?? '').trim(),
-            region: String(region ?? '').trim()
-        }
-    };
-
-    const response = await fetch(SCRIPT_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify(payload),
-        cache: 'no-store'
+    const result = await apiPost('addLocation', {
+        type,
+        value: cleanValue,
+        governorate: String(governorate ?? '').trim(),
+        region: String(region ?? '').trim()
     });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const result = await response.json();
     if (!result || result.status !== 'success') {
         throw new Error(result?.message || 'تعذر إضافة البيانات إلى Locations');
     }
@@ -741,18 +729,8 @@ async function handleReportPage() {
         if (!product || !campaign || !Number.isFinite(price) || price < 0) return;
 
         try {
-            const res = await fetch(SCRIPT_URL, {
-                method: 'POST',
-                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                body: JSON.stringify({
-                    action: 'updateProductPrice',
-                    payload: { product, price, campaign, barcode }
-                }),
-                cache: 'no-store'
-            });
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            const result = await res.json();
-            if (result.status !== 'success') throw new Error(result.message || 'تعذر تحديث السعر');
+            const result = await apiPost('updateProductPrice', { product, price, campaign, barcode });
+            if (!result || result.status !== 'success') throw new Error(result?.message || 'تعذر تحديث السعر');
 
             // السعر أصبح محفوظاً في Products. أعد تحميل بيانات الموقع كاملة من الـSheet
             // حتى يصبح السعر الجديد هو السعر المعتمد فوراً في الواجهة والباركود.
@@ -1035,13 +1013,8 @@ async function handleReportPage() {
                 return { queued: true };
             }
             try {
-                const res = await fetch(SCRIPT_URL, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                    body: JSON.stringify({ action: 'submitReport', payload: reportData })
-                });
-                const result = await res.json();
-                if (result.status !== 'success') throw new Error(result.message || 'فشل الحفظ');
+                const result = await apiPost('submitReport', reportData);
+                if (!result || result.status !== 'success') throw new Error(result?.message || 'فشل الحفظ');
                 // Do NOT rebuild the whole master-data cache after every report.
                 // Reports do not change Products/Locations/Employees, so a full refresh here
                 // only adds a large network round-trip and JSON parsing cost. The server

@@ -9,14 +9,15 @@ async function handleLoginPage() {
         const rememberMe = e.target.rememberMe.checked;
         const submitBtn = e.target.querySelector('button[type="submit"]');
         const errorMessage = document.getElementById('errorMessage');
-        // تسريع الدخول: نجلب البيانات الأساسية بالتوازي مع تحقق الهوية (بدل التسلسل).
-        const dbFetchPromise = (typeof getDbData === 'function') ? getDbData().catch(() => null) : Promise.resolve(null);
         submitBtn.disabled = true;
         submitBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جار التحقق...';
         errorMessage.textContent = '';
         try {
             const loginResult = await apiPost('doLogin', { username, password });
             if (loginResult.status !== 'success') throw new Error('Invalid credentials');
+
+            // V67: حفظ جلسة الدخول — تُرفق تلقائياً بكل طلب لاحق.
+            if (typeof storeAppToken === 'function') storeAppToken(loginResult.token);
             
             if (rememberMe) {
                 localStorage.setItem('currentUser', JSON.stringify(loginResult.user));
@@ -26,7 +27,16 @@ async function handleLoginPage() {
                 sessionStorage.setItem('loginTimestamp', Date.now());
             }
             
-            await dbFetchPromise;
+            // V67: قاعدة البيانات الأساسية تأتي ضمن استجابة الدخول (طلب واحد أسرع وأضمن).
+            if (loginResult.db && typeof window.memoryDbCache !== 'undefined') {
+                memoryDbCache = loginResult.db;
+                try {
+                    localStorage.setItem(APP_DB_KEY, JSON.stringify(loginResult.db));
+                    localStorage.setItem(APP_DB_TS_KEY, String(Date.now()));
+                } catch (e) { /* امتلاء التخزين */ }
+            } else {
+                try { await getDbData(); } catch (e) { /* الكاش يُلتقط عند أول شاشة */ }
+            }
             errorMessage.textContent = 'تم التحقق بنجاح! جارٍ التحويل...';
             errorMessage.style.color = '#2ecc71';
             // V50: تسجيل الجلسة في دفتر الجلسات المحلي — مع إشعار عند الدخول من جهاز جديد.

@@ -135,7 +135,7 @@ function forceLogout(message) {
     navigateTo('login');
 }
 
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyOFcr3Iu9f1wRdbhxBxaWxtOzO-7EQfFqkHeqjbkWZP0lIhh0ywlMbs_s6X6un0V9D/exec";
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwyrWCda3F2RUG07FIESwllS9XLjGrfdwLbj3Ah_xm5IQzreDp7AZ5Gdae-Rj8QAz6o/exec";
 const CACHE_DURATION_MINUTES = 1440;
 const FORM_STATE_KEY = 'reportFormLastState'; 
 const EDIT_STATE_KEY = 'reportToEdit';
@@ -158,30 +158,86 @@ function reportsScopeKey(params = {}) {
     return `${role}__${target}`;
 }
 
+// ===================================================================
+// V67: جلسة العميل — token يصدره الخادم عند الدخول ويُرفق بكل طلب لاحق.
+// عند رفض التوثيق (code='unauthorized') نُعيد المستخدم لشاشة الدخول تلقائياً.
+// ===================================================================
+const AUTH_TOKEN_KEY = 'appAuthToken';
+
+function storeAppToken(token) {
+    if (!token) return;
+    clearAppToken();
+    try { localStorage.setItem(AUTH_TOKEN_KEY, token); } catch (e) { try { sessionStorage.setItem(AUTH_TOKEN_KEY, token); } catch (e2) {} }
+}
+
+function getAppToken() {
+    try {
+        const t = localStorage.getItem(AUTH_TOKEN_KEY);
+        if (t) return t;
+        return sessionStorage.getItem(AUTH_TOKEN_KEY) || '';
+    } catch (e) { return ''; }
+}
+
+function clearAppToken() {
+    try { localStorage.removeItem(AUTH_TOKEN_KEY); } catch (e) {}
+    try { sessionStorage.removeItem(AUTH_TOKEN_KEY); } catch (e) {}
+}
+
+let authExpiryHandled = false;
+async function handleAuthExpired() {
+    if (authExpiryHandled) return;
+    authExpiryHandled = true;
+    clearAppToken();
+    localStorage.removeItem('currentUser');
+    sessionStorage.removeItem('currentUser');
+    localStorage.removeItem('loginTimestamp');
+    sessionStorage.removeItem('loginTimestamp');
+    invalidateSmartCaches();
+    Object.keys(viewMounted).forEach(k => delete viewMounted[k]);
+    currentRoute = null;
+    reportsMemoryByScope = {};
+    memoryReportsCache = null;
+    navigateTo('login');
+    await activateRoute();
+}
+
+function detectAuthFailure(res) {
+    if (!res || typeof res !== 'object') return;
+    if (res.status === 'error' && res.code === 'unauthorized') handleAuthExpired();
+}
+
 // GET عبر jQuery (مع احتياطي fetch).
 function apiGet(action, params = {}) {
     const query = new URLSearchParams();
     query.set('action', action);
     Object.entries(params).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== '') query.set(k, v); });
+    const token = getAppToken();
+    if (token) query.set('token', token);
     query.set('_', String(Date.now()));
     const url = `${SCRIPT_URL}?${query.toString()}`;
-    if (!window.jQuery) {
-        return fetch(url, { cache: 'no-store' }).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
-    }
-    return $.ajax({ url, method: 'GET', dataType: 'json', cache: false, timeout: 120000 })
-        .then(d => d, x => { throw new Error((x && (x.statusText || x.responseText)) || 'خطأ في الاتصال'); });
+    const req = !window.jQuery
+        ? fetch(url, { cache: 'no-store' }).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+        : $.ajax({ url, method: 'GET', dataType: 'json', cache: false, timeout: 120000 })
+            .then(d => d, x => { throw new Error((x && (x.statusText || x.responseText)) || 'خطأ في الاتصال'); });
+    return req.then(d => { detectAuthFailure(d); return d; });
 }
 
 // POST عبر jQuery (مع احتياطي fetch).
 function apiPost(action, payload = {}) {
+    const data = Object.assign({}, payload);
+    if (action !== 'doLogin') {
+        const token = getAppToken();
+        if (token) data.token = token;
+    }
     if (!window.jQuery) {
-        return fetch(SCRIPT_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action, payload }) }).then(r => r.json());
+        return fetch(SCRIPT_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action, payload: data }) })
+            .then(r => r.json()).then(d => { detectAuthFailure(d); return d; });
     }
     return $.ajax({
         url: SCRIPT_URL, method: 'POST', dataType: 'json',
         contentType: 'text/plain;charset=utf-8', timeout: 120000,
-        data: JSON.stringify({ action, payload })
-    }).then(d => d, x => { throw new Error((x && (x.statusText || x.responseText)) || 'خطأ في الاتصال'); });
+        data: JSON.stringify({ action, payload: data })
+    }).then(d => { detectAuthFailure(d); return d; }, x => { throw new Error((x && (x.statusText || x.responseText)) || 'خطأ في الاتصال'); });
 }
 
 // جلب getReports مع منع التكرار أثناء وجود طلب جارٍ (dedupe).
@@ -345,16 +401,14 @@ async function syncPendingReports() {
     let syncedAny = false;
     for (const item of pending) {
         try {
-            const res = await fetch(SCRIPT_URL, {
-                method: 'POST',
-                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                body: JSON.stringify({ action: 'submitReport', payload: item.reportData })
-            });
-            const result = await res.json();
-            if (result.status !== 'success') throw new Error(result.message || 'فشل المزامنة');
+            // V67: مزامنة آمنة عبر apiPost (يرفق الـ token تلقائياً ويتحقق من الجلسة).
+            const result = await apiPost('submitReport', item.reportData);
+            if (!result || result.status !== 'success') throw new Error(result?.message || 'فشل المزامنة');
             await removePendingReport(item.localId);
             syncedAny = true;
         } catch (error) {
+            // إن انتهت الجلسة، يوقف detectAuthFailure المزامنة ويعيد التوجيه لتسجيل الدخول.
+            if (error?.code === 'unauthorized') return;
             console.warn('Offline sync stopped:', error);
             break;
         }
@@ -410,13 +464,8 @@ async function syncPendingAttendance() {
     let syncedAny = false;
     for (const item of pending) {
         try {
-            const res = await fetch(SCRIPT_URL, {
-                method: 'POST',
-                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                body: JSON.stringify({ action: 'submitAttendance', payload: item.payload })
-            });
-            const result = await res.json();
-            if (result.status !== 'success') throw new Error(result.message || 'فشل المزامنة');
+            const result = await apiPost('submitAttendance', item.payload);
+            if (!result || result.status !== 'success') throw new Error(result?.message || 'فشل المزامنة');
             await removePendingAttendance(item.localId);
             syncedAny = true;
         } catch (error) {
@@ -469,8 +518,7 @@ async function syncPendingMovements() {
     let syncedAny=false;
     for (const item of pending) {
         try {
-            const res=await fetch(SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'addFestivalMovement',payload:item.payload})});
-            const result=await res.json();
+            const result=await apiPost('addFestivalMovement',item.payload);
             if(!result || result.status!=='success') throw new Error(result?.message||'فشل مزامنة الحركة');
             await removePendingMovement(item.localId); syncedAny=true;
         } catch(e) { console.warn('Movement offline sync stopped:',e); break; }
@@ -627,7 +675,8 @@ const SPA_ROUTES = {
     history: 'view-history',
     movement: 'view-movement',
     attendance: 'view-attendance',
-    dashboard: 'view-dashboard'
+    dashboard: 'view-dashboard',
+    users: 'view-users'
 };
 const SPA_TITLES = {
     login: 'تسجيل الدخول - لوحة التحكم',
@@ -635,7 +684,8 @@ const SPA_TITLES = {
     history: 'سجل التعديلات - لوحة التحكم',
     movement: 'سحب / مرتجع مواد - لوحة التحكم',
     attendance: 'الدوام - لوحة التحكم',
-    dashboard: 'التحليلات - لوحة التحكم'
+    dashboard: 'التحليلات - لوحة التحكم',
+    users: 'إدارة المستخدمين - لوحة التحكم'
 };
 const viewActivators = {};
 const viewMounted = {};
@@ -705,6 +755,10 @@ function bindShellUserControls() {
     if (logoutBtn && logoutBtn.dataset.logoutBound !== '1') {
         logoutBtn.dataset.logoutBound = '1';
         logoutBtn.addEventListener('click', () => {
+            // V67: إبطال الجلسة على الخادم أولاً ثم مسح بيئة العميل.
+            const sessionToken = getAppToken();
+            if (sessionToken) apiPost('logout', { token: sessionToken }).catch(() => {});
+            clearAppToken();
             localStorage.removeItem('currentUser');
             sessionStorage.removeItem('currentUser');
             localStorage.removeItem('loginTimestamp');
@@ -730,6 +784,8 @@ function bindShellUserControls() {
     // V46: المروج يرى رابط الدوام فقط.
     const isPromoter = isPromoterAccount(user);
     document.querySelectorAll('.nav-link-reports, .nav-link-history, .nav-link-movement, .nav-link-dashboard').forEach(el => { const it = el.closest('.nav-item'); if (it) it.style.display = isPromoter ? 'none' : ''; });
+    // V68: إدارة المستخدمين للإداري (admin) فقط — تُشغَّل بعد القاعدة أعلاه حتى لا يُعاد إظهارها لغير الإداري.
+    document.querySelectorAll('.nav-link-users').forEach(el => { const it = el.closest('.nav-item'); if (it) it.style.display = role === 'admin' ? '' : 'none'; });
     shellControlsBound = true;
 }
 
@@ -741,6 +797,8 @@ function activateRoute() {
     if (!user && route !== 'login') route = 'login';
     else if (user && route === 'login') { navigateHome(); return; }
     else if (user && isPromoterAccount(user) && route !== 'attendance') { navigateTo('attendance'); return; }
+    // V68: شاشة إدارة المستخدمين للإداري (admin) فقط.
+    else if (user && String(user.role || '').trim().toLowerCase() !== 'admin' && route === 'users') { navigateHome(); return; }
 
     currentRoute = route;
     const isLogin = route === 'login';
@@ -966,7 +1024,12 @@ function escapeHtmlGlobal(value) {
 
 function reportsToCSV(reports) {
     if (!Array.isArray(reports) || !reports.length) return 'لا توجد بيانات';
-    const escapeCsv = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const escapeCsv = (v) => {
+        const s = String(v ?? '');
+        // حقن الصيغ: نحيّد القيم التي تبدأ برموز Excel (= + - @) أو تبويب/سطر.
+        const neutralized = /^[=+\-@\t\r\n]/.test(s) ? "'" + s : s;
+        return `"${neutralized.replace(/"/g, '""')}"`;
+    };
     const headers = ['رقم التقرير','التاريخ','الحملة','الحدث','المحافظة','المنطقة','المحل','المشرف','المنسق','تبعية الجرد','عدد الأيام','الوقت من','الوقت إلى','هاتف','المبيعات','الكمية','عدد المبيعات','المصاريف','عدد المصاريف','ملاحظات','أنشئ بواسطة','تاريخ الإنشاء'];
     const lines = [headers.join(',')];
     reports.forEach(r => {

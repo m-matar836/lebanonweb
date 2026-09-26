@@ -28,12 +28,7 @@ async function handleAttendancePage() {
             button.disabled = true;
             const original = button.innerHTML;
             button.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
-            const res = await fetch(SCRIPT_URL, {
-                method: 'POST',
-                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                body: JSON.stringify({ action: 'approveAttendance', payload: { timestamp, username, role: user.role || '', status, reason: rejectReason, approvedBy: user.name || '', approvedAt: new Date().toISOString() } })
-            });
-            const result = await res.json();
+            const result = await apiPost('approveAttendance', { timestamp, username, role: user.role || '', status, reason: rejectReason, approvedBy: user.name || '', approvedAt: new Date().toISOString() });
             if (!result || result.status !== 'success') throw new Error(result?.message || 'فشل العملية');
             localStorage.removeItem(attendanceCacheKey());
             await load();
@@ -135,8 +130,8 @@ async function handleAttendancePage() {
             const saveOnlineOrQueue=async()=>{
                 if(!navigator.onLine){await queueAttendanceOffline(payload);return{queued:true};}
                 try{
-                    const r=await(await fetch(SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'submitAttendance',payload})})).json();
-                    if(r.status!=='success')throw Error(r.message||'فشل الحفظ');
+                    const r=await apiPost('submitAttendance', payload);
+                    if(!r||r.status!=='success')throw Error(r.message||'فشل الحفظ');
                     return r;
                 }catch(err){
                     const networkFailure=!navigator.onLine||err instanceof TypeError||/failed to fetch|network|load failed/i.test(String(err.message||''));
@@ -171,6 +166,9 @@ async function handleAttendancePage() {
         if (event.detail && event.detail.route !== 'attendance') return;
         await load();
     });
+
+    // V67: بعد انتهاء تحديث شامل للبيانات نعيد تحميل سجل الدوام عند فتح الشاشة.
+    window.addEventListener('appDataRefreshed', async () => { await load(); });
 
     await load();
 }

@@ -1,10 +1,10 @@
 // ===================================================================
-// Service Worker V42 — Smart cache / offline-first / fast navigation
+// Service Worker V48 — Smart cache / offline-first / fast navigation
 // ===================================================================
-const CACHE_NAME = 'festival-app-v46-spa';
+const CACHE_NAME = 'festival-app-v48-spa';
 const APP_SHELL = [
   './index.html',
-  './style.css','./core.js','./page-login.js','./page-reports.js','./page-history.js','./page-dashboard.js','./page-movement.js','./page-attendance.js','./manifest.json','./icons/icon.svg',
+  './style.css','./core.js','./page-login.js','./page-reports.js','./page-history.js','./page-dashboard.js','./page-movement.js','./page-attendance.js','./page-users.js','./manifest.json','./icons/icon.svg',
   'https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstrap.min.css',
   'https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/js/bootstrap.bundle.min.js',
   'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.1.1/css/all.min.css',
@@ -18,6 +18,14 @@ const CACHEABLE_API_ACTIONS = new Set([
   'getInitialData','getReports','getReportById','findProductByBarcode','getCompetitorProducts',
   'getUserFestivalMovements','getTeamOptions','getAttendance','getStatusOptions'
 ]);
+
+// V67: مفتاح الكاش يستبعد باراميترات الجلسة (token، _ ، _tt) حتى لا يُخزَّن الـ token
+// في IndexedDB ولا تتكاثر نسخ الكاش لكل جلسة دخول.
+function apiCacheKeyUrl(url) {
+  const u = new URL(url);
+  ['token','_','_tt'].forEach(p => u.searchParams.delete(p));
+  return u.toString();
+}
 
 async function cacheNetworkResponse(cache, request) {
   try {
@@ -77,23 +85,31 @@ self.addEventListener('fetch', event => {
     if(url.searchParams.has('_refresh') || url.searchParams.get('forceRefresh') === '1') {
       event.respondWith((async()=>{
         const fresh = await fetch(request);
-        if(fresh && fresh.ok) { const cache=await caches.open(CACHE_NAME); await cache.put(request, fresh.clone()); }
+        if(fresh && fresh.ok) { const cache=await caches.open(CACHE_NAME); await cache.put(new Request(apiCacheKeyUrl(request.url)), fresh.clone()); }
         return fresh;
       })());
       return;
     }
     event.respondWith((async()=>{
       const cache=await caches.open(CACHE_NAME);
-      const cached=await cache.match(request);
-      // API: stale-while-revalidate. The exact query string is the cache key,
-      // so user/role/target filters remain separated.
-      const refresh=cacheNetworkResponse(cache,request);
+      const keyReq=new Request(apiCacheKeyUrl(request.url));
+      const cached=await cache.match(keyReq);
+      // API: stale-while-revalidate. The cache key strips session params, so a single
+      // cached copy is shared across the whole session lifetime.
+      const refresh=(async()=>{
+        try {
+          const fresh=await fetch(request);
+          if(fresh && (fresh.ok || fresh.type==='opaque')) await cache.put(keyReq,fresh.clone());
+          return fresh;
+        } catch(e) { return null; }
+      })();
       if(cached){
         event.waitUntil(refresh.catch(()=>{}));
         return cached;
       }
-      const fresh=await refresh;
-      if(fresh) return fresh;
+      await refresh;
+      const stored=await cache.match(keyReq);
+      if(stored) return stored;
       return new Response(JSON.stringify({status:'error',message:'لا يوجد اتصال بالإنترنت ولا توجد بيانات مخزنة'}),{status:503,headers:{'Content-Type':'application/json'}});
     })());
     return;

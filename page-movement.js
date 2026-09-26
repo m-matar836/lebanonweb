@@ -157,8 +157,7 @@ async function handleMaterialsMovementPage() {
         try {
             const payload = { items, createdById: String(currentUser.id || ''), createdByName: String(currentUser.name || '') };
             if (!navigator.onLine) { await queueMovementOffline(payload); showToast('تم حفظ الحركة محلياً وستتم مزامنتها عند عودة الإنترنت.'); movementTableBody.innerHTML=''; updateOfflineStatus(); return; }
-            const res = await fetch(SCRIPT_URL, { method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body:JSON.stringify({action:'addFestivalMovement',payload}) });
-            const result = await res.json();
+            const result = await apiPost('addFestivalMovement', payload);
             if (!result || result.status !== 'success') throw new Error(result?.message || 'فشل حفظ الحركة');
             showToast('تم حفظ الحركة بنجاح.');
             movementTableBody.innerHTML = '';
@@ -197,12 +196,7 @@ async function handleMaterialsMovementPage() {
             button.disabled = true;
             const original = button.innerHTML;
             button.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
-            const res = await fetch(SCRIPT_URL, {
-                method: 'POST',
-                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                body: JSON.stringify({ action: 'approveMovement', payload: { id, role: currentUser.role || '', status, reason: rejectReason, approvedBy: currentUser.name || '', approvedAt: new Date().toISOString() } })
-            });
-            const result = await res.json();
+            const result = await apiPost('approveMovement', { id, role: currentUser.role || '', status, reason: rejectReason, approvedBy: currentUser.name || '', approvedAt: new Date().toISOString() });
             if (!result || result.status !== 'success') throw new Error(result?.message || 'فشل العملية');
             showToast(status === 'approved' ? 'تم اعتماد الحركة.' : 'تم رفض الحركة.');
             await refreshMovementsAndSummary(viewingTargetId);
@@ -235,10 +229,10 @@ async function handleMaterialsMovementPage() {
             movementHistoryBody.innerHTML = movements.map(m => {
                 const review = canReviewMov ? (
                     `<span class="d-inline-block me-2">${m.approvalStatus === 'approved' ? '<span class="badge bg-success">معتمد</span>' : (m.approvalStatus === 'rejected' ? '<span class="badge bg-danger">مرفوض</span>' : '<span class="badge bg-secondary">قيد المراجعة</span>')}</span>` +
-                    (m.approvalStatus !== 'approved' ? `<button class="btn btn-sm btn-outline-success approve-move-btn" data-id="${m.id}" title="اعتماد الحركة"><i class="fa-solid fa-check"></i></button> ` : '') +
-                    (m.approvalStatus !== 'rejected' ? `<button class="btn btn-sm btn-outline-danger reject-move-btn" data-id="${m.id}" title="رفض الحركة"><i class="fa-solid fa-ban"></i></button>` : '')
+                    (m.approvalStatus !== 'approved' ? `<button class="btn btn-sm btn-outline-success approve-move-btn" data-id="${escapeHtmlSafe(m.id)}" title="اعتماد الحركة"><i class="fa-solid fa-check"></i></button> ` : '') +
+                    (m.approvalStatus !== 'rejected' ? `<button class="btn btn-sm btn-outline-danger reject-move-btn" data-id="${escapeHtmlSafe(m.id)}" title="رفض الحركة"><i class="fa-solid fa-ban"></i></button>` : '')
                 ) : '';
-                return `<tr><td>${m.item}</td><td>${m.quantity}</td><td>${m.invoiceNumber ? m.invoiceNumber : '-'}</td><td>${operationBadge(m.operation)}</td><td>${m.date}</td><td>${m.reportId ? m.reportId : '-'}</td><td>${m.createdByName || '-'}</td><td class="text-nowrap">${review}</td></tr>`;
+                return `<tr><td>${escapeHtmlSafe(m.item)}</td><td>${escapeHtmlSafe(m.quantity)}</td><td>${m.invoiceNumber ? escapeHtmlSafe(m.invoiceNumber) : '-'}</td><td>${operationBadge(m.operation)}</td><td>${escapeHtmlSafe(m.date)}</td><td>${m.reportId ? escapeHtmlSafe(m.reportId) : '-'}</td><td>${escapeHtmlSafe(m.createdByName) || '-'}</td><td class="text-nowrap">${review}</td></tr>`;
             }).join('');
             movementHistoryBody.querySelectorAll('.approve-move-btn').forEach(b => b.addEventListener('click', () => reviewMovement(b, b.dataset.id, 'approved')));
             movementHistoryBody.querySelectorAll('.reject-move-btn').forEach(b => b.addEventListener('click', () => reviewMovement(b, b.dataset.id, 'rejected')));
@@ -256,10 +250,10 @@ async function handleMaterialsMovementPage() {
 
             const summary = Array.from(summaryMap.values()).map(e => ({ ...e, remaining: e.withdrawn - e.returned - e.expensed - e.sold }));
             inventorySummaryBody.innerHTML = summary.map(e =>
-                `<tr><td>${e.item}</td><td>${e.withdrawn}</td><td>${e.returned}</td><td>${e.expensed}</td><td>${e.sold}</td><td class="fw-bold ${e.remaining < 0 ? 'text-danger' : ''}">${e.remaining}</td></tr>`
+                `<tr><td>${escapeHtmlSafe(e.item)}</td><td>${e.withdrawn}</td><td>${e.returned}</td><td>${e.expensed}</td><td>${e.sold}</td><td class="fw-bold ${e.remaining < 0 ? 'text-danger' : ''}">${e.remaining}</td></tr>`
             ).join('');
         } catch (e) {
-            movementHistoryBody.innerHTML = `<tr><td colspan="8" class="text-center text-danger">تعذر تحميل السجل: ${e.message || ''}</td></tr>`;
+            movementHistoryBody.innerHTML = `<tr><td colspan="8" class="text-center text-danger">تعذر تحميل السجل: ${escapeHtmlSafe(e.message || '')}</td></tr>`;
             inventorySummaryBody.innerHTML = `<tr><td colspan="6" class="text-center text-danger">تعذر تحميل المحصلة</td></tr>`;
         }
     }

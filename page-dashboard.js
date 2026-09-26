@@ -786,12 +786,7 @@ ${dots}
         savePromoterGoalsBtn.disabled = true;
         savePromoterGoalsBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin me-1"></i> جارٍ الحفظ...';
         try {
-            const res = await fetch(SCRIPT_URL, {
-                method: 'POST',
-                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                body: JSON.stringify({ action: 'savePromoterGoals', payload: { role: currentUser.role, month, entries: flat } })
-            });
-            const result = await res.json();
+            const result = await apiPost('savePromoterGoals', { role: currentUser.role, month, entries: flat });
             if (!result || result.status !== 'success') throw new Error(result?.message || 'فشل الحفظ');
             promoterGoalsMap.set(month, new Map(flat.map(e => [e.promoter, { points: e.points, pieces: e.pieces }])));
             renderPromoterGoals((lastView && lastView.allReports) || [], month);
@@ -815,12 +810,7 @@ ${dots}
             backupResultMsg.className = 'small mt-2';
             backupResultMsg.textContent = '';
             try {
-                const res = await fetch(SCRIPT_URL, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                    body: JSON.stringify({ action, payload: { role: currentUser.role } })
-                });
-                const result = await res.json();
+                const result = await apiPost(action, { role: currentUser.role });
                 if (!result || result.status !== 'success') throw new Error(result?.message || 'فشلت العملية');
                 backupResultMsg.className = 'small mt-2 text-success';
                 backupResultMsg.innerHTML = result.url
@@ -950,12 +940,7 @@ ${dots}
             archiveBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin me-1"></i> جاري الأرشفة...';
             archiveResultMsg.textContent = '';
             try {
-                const res = await fetch(SCRIPT_URL, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                    body: JSON.stringify({ action: 'archiveOldReports', payload: { role: currentUser.role, monthsToKeep: months } })
-                });
-                const result = await res.json();
+                const result = await apiPost('archiveOldReports', { role: currentUser.role, monthsToKeep: months });
                 if (!result || result.status !== 'success') throw new Error(result?.message || 'فشلت عملية الأرشفة');
 
                 if (result.archivedReports > 0) {

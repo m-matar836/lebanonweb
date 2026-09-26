@@ -266,23 +266,15 @@ ${(isAdmin || isManager || isAuditor) && String(report.approvalStatus || '').tri
             const original = button.innerHTML;
             button.innerHTML = `<i class="fa-solid fa-spinner fa-spin me-1"></i> ${isReject ? 'جارٍ الرفض...' : 'جارٍ الاعتماد...'}`;
             try {
-                const res = await fetch(SCRIPT_URL, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                    body: JSON.stringify({
-                        action: 'approveReport',
-                        payload: {
-                            id: reportId,
-                            role: currentUser.role || '',
-                            status,
-                            reason,
-                            userName: currentUser.name || '',
-                            approvedBy: currentUser.name || '',
-                            approvedAt: new Date().toISOString()
-                        }
-                    })
+                const result = await apiPost('approveReport', {
+                    id: reportId,
+                    role: currentUser.role || '',
+                    status,
+                    reason,
+                    userName: currentUser.name || '',
+                    approvedBy: currentUser.name || '',
+                    approvedAt: new Date().toISOString()
                 });
-                const result = await res.json();
                 if (!result || result.status !== 'success') throw new Error(result?.message || (isReject ? 'فشل الرفض' : 'فشل الاعتماد'));
                 invalidateReportsCache();
                 const current = currentReports.find(r => r.id == reportId);
@@ -331,20 +323,12 @@ ${(isAdmin || isManager || isAuditor) && String(report.approvalStatus || '').tri
                 const original = button.innerHTML;
                 button.innerHTML = '<i class="fa-solid fa-spinner fa-spin me-1"></i> جارٍ الحذف...';
                 try {
-                    const res = await fetch(SCRIPT_URL, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                        body: JSON.stringify({
-                            action: 'deleteReport',
-                            payload: {
-                                id: reportId,
-                                role: currentUser.role || '',
-                                userName: currentUser.name || '',
-                                userId: String(currentUser.id || '')
-                            }
-                        })
+                    const result = await apiPost('deleteReport', {
+                        id: reportId,
+                        role: currentUser.role || '',
+                        userName: currentUser.name || '',
+                        userId: String(currentUser.id || '')
                     });
-                    const result = await res.json();
                     if (!result || result.status !== 'success') throw new Error(result?.message || 'فشل الحذف');
                     invalidateReportsCache();
                     currentReports = (currentReports || []).filter(r => String(r.id) !== String(reportId));

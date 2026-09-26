@@ -21,27 +21,105 @@ const CACHE_EXPIRATION_SECONDS = 3600;
 const INITIAL_DATA_CACHE_VERSION = 'v26-employees-merged';
 const PRODUCT_LOOKUP_CACHE_VERSION = 'v25-product-lookup';
 
+// ===============================================================
+// V67: نظام الجلسات (التوثيق). سابقاً كان العميل يحدد هويته ودوره بنفسه في كل
+// طلب، ما كان يسمح لأي شخص يعرف رابط التطبيق بقراءة كل البيانات أو التلاعب بها.
+// الآن يُصدر doLogin رمز token، وتتحقق كل دوال القراءة/الكتابة من الرمز ثم
+// تستخرج الهوية والدور من ملف Employees (المصدر الموثوق) — أي قيمة يرسلها
+// العميل لهوية/دور تُتجاهل وتُستبدل بقيمة الخادم.
+// مدة الجلسة: 6 ساعات (الحد الأقصى المسموح لـ ScriptCache TTL).
+// ===============================================================
+const SESSION_CACHE_PREFIX_ = 'sess_';
+const SESSION_DURATION_SECONDS_ = 6 * 60 * 60;
+const SESSION_STORE_ = CacheService.getScriptCache();
+
+// خطأ توثيق يحمل code='unauthorized' حتى يميزه العميل عن بقية الأخطاء.
+function unauthorizedError_(message) {
+  const err = new Error(message || 'Unauthorized');
+  err.code = 'unauthorized';
+  return err;
+}
+
+// قراءة صف الموظف من ملف Employees — المصدر الموثوق للهوية والدور والمنصب.
+function getEmployeeByIdOrUsername_(value) {
+  const sheet = aSheet.getSheetByName("Employees");
+  if (!sheet || sheet.getLastRow() < 2) return null;
+  const v = String(value || '').trim();
+  const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 7).getValues();
+  for (let i = 0; i < data.length; i++) {
+    const row = data[i];
+    const rowId = String(row[0] || '').trim();
+    const rowUsername = String(row[2] || '').trim();
+    if (rowId === v || rowUsername.toLowerCase() === v.toLowerCase()) {
+      return {
+        id: rowId || rowUsername.toLowerCase(),
+        username: rowUsername,
+        systemRole: String(row[4] || '').trim().toLowerCase(),
+        jobPosition: String(row[5] || '').trim(),
+        mgr: String(row[6] || '').trim(),
+        name: String(row[1] || '').trim() || rowUsername
+      };
+    }
+  }
+  return null;
+}
+
+// إنشاء جلسة وإرجاع الـ token الجديد.
+function createSession_(employee) {
+  const token = Utilities.getUuid().replace(/-/g, '');
+  const expiresAt = Date.now() + SESSION_DURATION_SECONDS_ * 1000;
+  try { SESSION_STORE_.put(SESSION_CACHE_PREFIX_ + token, employee.id + '|' + expiresAt, SESSION_DURATION_SECONDS_); } catch (e) {}
+  return { token, expiresAt };
+}
+
+// إنهاء الجلسة فوراً (زر خروج) — لا يصلح الـ token بعدها.
+function revokeSession_(token) {
+  const t = String(token || '').trim();
+  if (!t) return;
+  try { SESSION_STORE_.remove(SESSION_CACHE_PREFIX_ + t); } catch (e) {}
+}
+
+// تحويل token صالح إلى كائن الموظف الموثّق — أي طلب بلا token أو بجلسة منتهية يُرفض.
+function authenticateRequest_(token) {
+  const t = String(token || '').trim();
+  if (!t) throw unauthorizedError_('لا توجد جلسة دخول — سجّل الدخول أولاً');
+  let entry = null;
+  try { entry = SESSION_STORE_.get(SESSION_CACHE_PREFIX_ + t); } catch (e) {}
+  if (!entry) throw unauthorizedError_('انتهت الجلسة أو غير صالحة — سجّل الدخول مجدداً');
+  const parts = String(entry).split('|');
+  if (Number(parts[1]) < Date.now()) {
+    try { SESSION_STORE_.remove(SESSION_CACHE_PREFIX_ + t); } catch (e) {}
+    throw unauthorizedError_('انتهت مدة الجلسة — سجّل الدخول مجدداً');
+  }
+  const emp = getEmployeeByIdOrUsername_(parts[0]);
+  if (!emp) throw unauthorizedError_('الحساب غير موجود');
+  return emp;
+}
+
 function doGet(e) {
   try {
     const action = e.parameter.action;
+    // V67: كل أفعال GET تتطلب جلسة موثّقة؛ الهوية والدور من ملف Employees على الخادم.
+    const emp = authenticateRequest_(e.parameter.token);
     let response;
     switch (action) {
       case "getInitialData": response = getInitialData(e.parameter.forceRefresh === "1"); break;
-      case "getReports": response = getReports(e.parameter.userId, e.parameter.role, e.parameter.userName, e.parameter.targetUserId); break;
-      case "getReportById": response = getReportById(e.parameter.id); break;
+      case "getReports": response = getReports(emp.id, emp.systemRole, emp.name, e.parameter.targetUserId); break;
+      case "getReportById": response = getReportById(e.parameter.id, emp); break;
       case "findProductByBarcode": response = findProductByBarcode(e.parameter.barcode, e.parameter.campaign); break;
       case "getCompetitorProducts": response = getCompetitorProductsFromSheet(); break;
-      case "getUserFestivalMovements": response = getUserFestivalMovements(e.parameter.userId, e.parameter.role, e.parameter.targetUserId); break;
-      case "getTeamOptions": response = getTeamOptions(e.parameter.userId, e.parameter.role); break;
-      case "getAttendance": response = getAttendance(e.parameter.userId, e.parameter.role, e.parameter.userName, e.parameter.targetUserId); break;
+      case "getUserFestivalMovements": response = getUserFestivalMovements(emp.id, emp.systemRole, e.parameter.targetUserId); break;
+      case "getTeamOptions": response = getTeamOptions(emp.id, emp.systemRole); break;
+      case "getAttendance": response = getAttendance(emp.id, emp.systemRole, emp.name, e.parameter.targetUserId); break;
       case "getStatusOptions": response = getStatusOptions(); break;
-      case "getDashboardData": response = getDashboardData(e.parameter.userId, e.parameter.role); break;
-      case "getPromoterGoals": response = getPromoterGoals(e.parameter.month, e.parameter.userId, e.parameter.role); break;
+      case "getDashboardData": response = getDashboardData(emp.id, emp.systemRole); break;
+      case "getPromoterGoals": response = getPromoterGoals(e.parameter.month, emp.id, emp.systemRole); break;
+      case "getUsers": response = getUsersAdmin(emp); break;
       default: response = {status:"error", message:"Invalid GET Action"};
     }
     return createJsonResponse(response);
   } catch (err) {
-    return createJsonResponse({status:"error", message:err.message});
+    return createJsonResponse({status:"error", code:err.code||'', message:err.message});
   }
 }
 
@@ -51,80 +129,119 @@ function doPost(e) {
     const action = request.action;
     let response;
 
-    switch (action) {
-      case "doLogin":
-        response = doLogin(request.payload);
-        break;
+    if (action === "doLogin") {
+      response = doLogin(request.payload);
+    } else if (action === "logout") {
+      // V67: إلغاء الجلسة فوراً — يُرسل العميل الـ token الحالي ليُبطَل.
+      revokeSession_((request.payload || {}).token);
+      response = {status:"success"};
+    } else {
+      const raw = request.payload || {};
+      // V67: هوية ودور موثّقان من ملف Employees — نستبدل أي قيم يرسلها العميل.
+      const emp = authenticateRequest_(raw.token);
+      const payload = Object.assign({}, raw);
+      delete payload.token;
+      payload.userId = emp.id;
+      payload.userName = emp.name;
+      payload.role = emp.systemRole;
+      payload.mgr = emp.mgr;
+      payload.jobPosition = emp.jobPosition;
+      // ملاحظة: payload.username لا يُكتب هنا — فهو يحمل معنيين مختلفين:
+      // هوية مُسجِّل الدوام (submitAttendance) أو معرّف سجل الدوام المستهدف (approveAttendance).
+      // يُضبط لمجال الدوام فقط عند الحاجة أدناه.
+      // أسماء/معرّفات المُنشئ والمُعدّل تُفرض من الخادم (لا يمكن تزويرها).
+      payload.createdById = emp.id;
+      payload.createdByName = emp.name;
+      payload.editedBy = emp.name;
 
-      case "submitReport":
-        response = handleReportSubmission(request.payload);
-        break;
+      switch (action) {
+        case "submitReport":
+          response = handleReportSubmission(payload);
+          break;
 
-      case "addLocation":
-        response = addLocation(request.payload);
-        break;
+        case "addLocation":
+          response = addLocation(payload);
+          break;
 
-      case "updateProductPrice":
-        response = updateProductPrice(request.payload);
-        break;
+        case "updateProductPrice":
+          response = updateProductPrice(payload);
+          break;
 
-      case "refreshCache":
-        response = refreshCache();
-        break;
+        case "refreshCache":
+          response = refreshCache();
+          break;
 
-      case "addFestivalMovement":
-        response = addFestivalMovement(request.payload);
-        break;
+        case "addFestivalMovement":
+          response = addFestivalMovement(payload);
+          break;
 
-      case "closeOutUserTallyToSales":
-        response = closeOutUserTallyToSales(request.payload);
-        break;
-      case "submitAttendance":
-        response = submitAttendance(request.payload);
-        break;
+        case "closeOutUserTallyToSales":
+          response = closeOutUserTallyToSales(payload);
+          break;
 
-      case "archiveOldReports":
-        response = archiveOldReports(request.payload);
-        break;
+        case "submitAttendance":
+          // V67: هوية مُسجِّل الدوام من الحساب الموثّق حصراً — لا يمكن التبليغ عن الدوام بصيغة مغايرة.
+          payload.username = emp.username;
+          response = submitAttendance(payload);
+          break;
 
-      // V50: اعتماد التقارير — دور «مدقق» (auditor) أو admin فقط.
-      case "approveReport":
-        response = approveReport(request.payload);
-        break;
+        case "archiveOldReports":
+          response = archiveOldReports(payload);
+          break;
 
-      // V61: حذف ناعم لتقرير — admin/manager/auditor.
-      case "deleteReport":
-        response = deleteReport(request.payload);
-        break;
+        // V50: اعتماد التقارير — دور «مدقق» (auditor) أو admin فقط.
+        case "approveReport":
+          response = approveReport(payload);
+          break;
 
-      // V66: اعتماد/رفض سجل دوام.
-      case "approveAttendance":
-        response = approveAttendance(request.payload);
-        break;
+        // V61: حذف ناعم لتقرير — admin/manager/auditor.
+        case "deleteReport":
+          response = deleteReport(payload);
+          break;
 
-      // V66: اعتماد/رفض حركة سحب/مرتجع.
-      case "approveMovement":
-        response = approveMovement(request.payload);
-        break;
+        // V66: اعتماد/رفض سجل دوام.
+        case "approveAttendance":
+          response = approveAttendance(payload);
+          break;
 
-      // V63: أهداف المروجين الشهرية.
-      case "savePromoterGoals":
-        response = savePromoterGoals(request.payload);
-        break;
+        // V66: اعتماد/رفض حركة سحب/مرتجع.
+        case "approveMovement":
+          response = approveMovement(payload);
+          break;
 
-      // V63: النسخ الاحتياطي الأسبوعي.
-      case "setupWeeklyBackup":
-        response = setupWeeklyBackup(request.payload);
-        break;
-      case "backupNow":
-        response = backupNow(request.payload);
-        break;
+        // V63: أهداف المروجين الشهرية.
+        case "savePromoterGoals":
+          response = savePromoterGoals(payload);
+          break;
 
-      default:
-        response = {
-          status: "error",
-          message: "Invalid POST Action: " + action
-        };
+        // V63: النسخ الاحتياطي الأسبوعي.
+        case "setupWeeklyBackup":
+          response = setupWeeklyBackup(payload);
+          break;
+        case "backupNow":
+          response = backupNow(payload);
+          break;
+
+        // V68: إدارة المستخدمين والصلاحيات — للإداري (admin) فقط.
+        case "saveUser":
+          // «المنصب الوظيفي» (jobPosition) و«المدير المباشر» (manager) حقلان من نموذج
+          // إدارة المستخدمين — نستعيدهما من الطلب الخام لأن doPost يفرض قيمهما
+          // تلقائياً لصاحب الطلب نفسه.
+          payload.jobPosition = String(raw.jobPosition || '').trim();
+          payload.actorUsername = emp.username;
+          response = saveUser(payload);
+          break;
+        case "deleteUser":
+          payload.actorUsername = emp.username;
+          response = deleteUser(payload);
+          break;
+
+        default:
+          response = {
+            status: "error",
+            message: "Invalid POST Action: " + action
+          };
+      }
     }
 
     return createJsonResponse(response);
@@ -132,12 +249,13 @@ function doPost(e) {
   } catch (err) {
     return createJsonResponse({
       status: "error",
+      code: err.code || '',
       message: err.message
     });
   }
 }
 
-function createJsonResponse(data) {
+    function createJsonResponse(data) {
   return ContentService.createTextOutput(JSON.stringify(data)).setMimeType(ContentService.MimeType.JSON);
 }
 
@@ -432,7 +550,12 @@ function doLogin(payload) {
     const rawId = String(row[0] || '').trim();
     const rawName = String(row[1] || '').trim();
     const rawUsername = String(row[2] || '').trim();
-    return {status:"success", user:{
+    // V67: إنشاء جلسة وإرجاع الـ token — كل الطلبات اللاحقة تتطلب هذا الـ token.
+    const session = createSession_({ id: rawId || rawUsername });
+    // V67: نُسابق قاعدة البيانات الأساسية ضمن استجابة الدخول — دخول أسرع بطلب واحد.
+    let initDb = null;
+    try { initDb = getInitialData(false); } catch (e) { initDb = null; }
+    return {status:"success", token: session.token, expiresAt: session.expiresAt, db: initDb, user:{
       id: rawId || rawUsername,
       username: rawUsername,
       role: String(row[4] || '').trim().toLowerCase(),
@@ -847,6 +970,11 @@ function ensureReportsColumn(columnName) {
 
 function updateProductPrice(payload) {
   payload = payload || {};
+  // V67: تغيير الأسعار للإداري/المدير فقط.
+  const updaterRole = String(payload.role || '').trim().toLowerCase();
+  if (updaterRole !== 'admin' && updaterRole !== 'manager') {
+    throw new Error('صلاحية تعديل أسعار المواد متاحة للإداري (admin) والمدير (manager) فقط');
+  }
   const productName = String(payload.product || '').trim();
   const campaign = String(payload.campaign || '').trim();
   const price = Number(payload.price);
@@ -920,8 +1048,8 @@ function handleReportSubmission(reportData) {
   ['photo', 'signature', 'approvalStatus', 'approvedBy', 'approvedAt'].forEach(ensureReportsColumn);
   // V61: أعمدة أثر التعديل والموقع الجغرافي والحذف الناعم.
   ['editedAt', 'editedBy', 'latitude', 'longitude', 'deletedAt', 'deletedBy'].forEach(ensureReportsColumn);
-  const submittedUserId = String(reportData.createdById || '').trim();
-  const submittedUserName = String(reportData.createdByName || '').trim();
+  const submittedUserId = String(reportData.userId || reportData.createdById || '').trim();
+  const submittedUserName = String(reportData.userName || reportData.createdByName || '').trim();
   const eventType = String(reportData.event || '').trim();
   const phoneNumber = String(reportData.phoneNumber || '').trim();
   if (eventType === 'ترويج وبيع غير مباشر' && !phoneNumber) {
@@ -939,6 +1067,15 @@ function handleReportSubmission(reportData) {
     const ownerNameCol = headers.findIndex(h => normalizeHeaderName(h) === normalizeHeaderName('createdByName'));
     if (ownerIdCol >= 0 && String(existingRow[ownerIdCol] || '').trim()) reportData.createdById = String(existingRow[ownerIdCol]);
     if (ownerNameCol >= 0 && String(existingRow[ownerNameCol] || '').trim()) reportData.createdByName = String(existingRow[ownerNameCol]);
+    // V67: عند التعديل يُسمح للحفظ لمالك التقرير أو لإداري/مدير/مدقق فقط.
+    const ownerId = ownerIdCol >= 0 ? String(existingRow[ownerIdCol] || '').trim() : '';
+    const ownerName = ownerNameCol >= 0 ? String(existingRow[ownerNameCol] || '').trim() : '';
+    const requesterRole = String(reportData.role || '').trim().toLowerCase();
+    const isOwner = ownerId !== '' && submittedUserId !== '' && ownerId === submittedUserId;
+    if (!isOwner && requesterRole !== 'admin' && requesterRole !== 'manager' && requesterRole !== 'auditor') {
+      const ownerLabel = ownerName || ownerId || 'شخص آخر';
+      throw new Error('لا يمكنك تعديل تقرير أنشأه ' + ownerLabel + ' — هذه الصلاحية لصاحب التقرير أو للإداري/المدير فقط');
+    }
   }
 
   // ملكية التقرير: تُحفظ عند الإنشاء، وعند التعديل يتم الحفاظ على المالك الأصلي أعلاه.
@@ -1114,8 +1251,10 @@ function getReports(userId, userRole, userName, targetUserId) {
   });
 }
 
-function getReportById(id) {
-  const report = getReports().find(r => String(r.id) === String(id));
+function getReportById(id, requester) {
+  // V67: البحث داخل نطاق صلاحية الطالب فقط (لا يكشف تقارير المستخدمين الآخرين).
+  const req = requester || {};
+  const report = getReports(req.id, req.systemRole, req.name, '').find(r => String(r.id) === String(id));
   if (!report) return {status:'error',message:'Report not found'};
   // V50: قراءة الصورة والتوقيع لهذا التقرير فقط (مستثناة من قوائم getReports).
   try {
@@ -1338,6 +1477,10 @@ function archiveOldReports(payload) {
 }
 
 function addLocation(payload) {
+  payload = payload || {};
+  // V67: إضافة المواقع للإداري (admin) فقط.
+  const adderRole = String(payload.role || '').trim().toLowerCase();
+  if (adderRole !== 'admin') throw new Error('صلاحية إضافة المواقع متاحة للإداري (admin) فقط');
   const sheet = aSheet.getSheetByName("Locations");
 
   if (!sheet) {
@@ -1977,4 +2120,142 @@ function backupNow(payload) {
   if (role !== 'admin') throw new Error('صلاحية إنشاء نسخة احتياطية متاحة للإداري (admin) فقط');
   const result = createBackupSpreadsheet_();
   return { status: 'success', message: 'تم إنشاء النسخة الاحتياطية.', url: result.url };
+}
+
+// ===============================================================
+// V68: إدارة المستخدمين والصلاحيات — للإداري (admin) فقط.
+// الأعمدة: A=id، B=name، C=username، D=password (hash)، E=systemRole،
+// F=jobPosition (المنصب الوظيفي)، G=mgr (اسم المدير المباشر).
+// لا تُكشف كلمات المرور أبداً — admin يضبطها فقط (تُخزَّن hash).
+// ===============================================================
+
+// قراءة صفوف الموظفين (المعرّف + اسم الدخول + الدور) لفحص «آخر إداري».
+function employeesRows_() {
+  const sheet = aSheet.getSheetByName('Employees');
+  if (!sheet || sheet.getLastRow() < 2) return [];
+  return sheet.getRange(2, 1, sheet.getLastRow() - 1, 7).getValues();
+}
+
+function invalidateInitialDataCache_() {
+  try { cache.remove('initialData_' + INITIAL_DATA_CACHE_VERSION); } catch (e) {}
+}
+
+function getUsersAdmin(requester) {
+  requester = requester || {};
+  if (String(requester.systemRole || '').trim().toLowerCase() !== 'admin') {
+    throw new Error('صلاحية إدارة المستخدمين مخصصة للإداري (admin) فقط');
+  }
+  const sheet = aSheet.getSheetByName('Employees');
+  if (!sheet || sheet.getLastRow() < 2) return { status: 'success', users: [] };
+  const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 7).getValues();
+  return {
+    status: 'success',
+    users: data.map(row => ({
+      id: String(row[0] ?? '').trim(),
+      name: String(row[1] ?? '').trim(),
+      username: String(row[2] ?? '').trim(),
+      systemRole: String(row[4] ?? '').trim().toLowerCase(),
+      jobPosition: String(row[5] ?? '').trim(),
+      mgr: String(row[6] ?? '').trim(),
+      hasPassword: !!String(row[3] ?? '').trim()
+    })).filter(u => u.name || u.username || u.id)
+  };
+}
+
+// إنشاء مستخدم جديد أو تعديل مستخدم موجود (editUsername = اسم الدخول الأصلي).
+function saveUser(payload) {
+  payload = payload || {};
+  const actorRole = String(payload.role || '').trim().toLowerCase();
+  if (actorRole !== 'admin') throw new Error('صلاحية إدارة المستخدمين مخصصة للإداري (admin) فقط');
+  const norm = s => String(s || '').trim().toLowerCase();
+  const actorUsername = String(payload.actorUsername || '').trim().toLowerCase();
+  const editUsername = String(payload.editUsername || '').trim().toLowerCase();
+  const name = String(payload.name || '').trim();
+  const username = String(payload.username || '').trim().toLowerCase();
+  if (!name) throw new Error('اسم الموظف مطلوب');
+  if (!username) throw new Error('اسم الدخول (username) مطلوب');
+  if (!/^[a-zA-Z0-9._\-]{3,50}$/.test(username)) throw new Error('اسم الدخول يجب أن يكون 3-50 حرفاً إنجليزياً/رقمياً بدون مسافات');
+  const systemRole = String(payload.systemRole || '').trim().toLowerCase();
+  const allowedRoles = ['admin', 'manager', 'auditor', 'user'];
+  if (allowedRoles.indexOf(systemRole) === -1) throw new Error('صلاحية غير معروفة — اختر من القائمة');
+  const jobPosition = String(payload.jobPosition || '').trim();
+  const mgr = String(payload.manager || '').trim();
+  const newPassword = String(payload.password || '').trim();
+
+  const rows = employeesRows_();
+  let targetIndex = -1;
+  if (editUsername) {
+    for (let i = 0; i < rows.length; i++) {
+      if (norm(rows[i][2]) === editUsername) { targetIndex = i; break; }
+    }
+    if (targetIndex === -1) throw new Error('الحساب المطلوب تعديله غير موجود');
+  }
+
+  // فحص تفرد اسم الدخول (مع استثناء الصف نفسه عند التعديل).
+  for (let i = 0; i < rows.length; i++) {
+    if (i === targetIndex) continue;
+    if (norm(rows[i][2]) === username) throw new Error('اسم الدخول مستخدم من قبل — اختر اسماً آخر');
+  }
+
+  // حماية: آخر إداري لا يُحذف ولا يُسحب، والإداري لا يسحب صلاحيته عن نفسه.
+  const countAdmins = rows.filter(r => norm(r[4]) === 'admin').length;
+  const targetRow = targetIndex >= 0 ? rows[targetIndex] : null;
+  if (targetRow !== null) {
+    const isEditSelf = actorUsername !== '' && norm(targetRow[2]) === actorUsername;
+    if (norm(targetRow[4]) === 'admin' && systemRole !== 'admin' && countAdmins <= 1) {
+      throw new Error('لا يمكن إزالة آخر حساب إداري — أضف إدارياً آخر أولاً');
+    }
+    if (isEditSelf && systemRole !== 'admin') throw new Error('لا يمكنك سحب صلاحية الإداري عن حسابك');
+  }
+
+  // كلمة المرور: مطلوبة للمستخدم الجديد، اختيارية عند التعديل (فارغة = إبقاء الحالية).
+  let newHash = null;
+  if (targetIndex === -1) {
+    if (!newPassword) throw new Error('كلمة المرور مطلوبة لإنشاء حساب جديد');
+    if (newPassword.length < 4) throw new Error('كلمة المرور لا تقل عن 4 أحرف');
+    newHash = hashPassword_(newPassword);
+  } else if (newPassword) {
+    if (newPassword.length < 4) throw new Error('كلمة المرور لا تقل عن 4 أحرف');
+    newHash = hashPassword_(newPassword);
+  }
+
+  const sheet = aSheet.getSheetByName('Employees');
+  if (targetIndex === -1) {
+    const rowNum = sheet.getLastRow() + 1;
+    const hash = newHash ? ('pwd$' + newHash.salt + '$' + newHash.hash) : '';
+    // A=id(فارغ)، B=name، C=username، D=password(hash)، E=systemRole، F=jobPosition، G=mgr.
+    sheet.getRange(rowNum, 1, 1, 7).setValues([['', name, username, hash, systemRole, jobPosition, mgr]]);
+    invalidateInitialDataCache_();
+    return { status: 'success', message: 'تم إنشاء الحساب «' + name + '» بنجاح.' };
+  }
+  const rowNum = targetIndex + 2;
+  // V68: نكتب الأعمدة الصحيحة فقط، مع ترك عمود كلمة المرور (D) دون مسّ ما لم تُحدَّث:
+  // B=name، C=username ثم E=systemRole، F=jobPosition، G=mgr (نكسر الاستمرارية لتجنّب الكتابة على D).
+  sheet.getRange(rowNum, 2, 1, 2).setValues([[name, username]]);
+  sheet.getRange(rowNum, 5, 1, 3).setValues([[systemRole, jobPosition, mgr]]);
+  if (newHash) sheet.getRange(rowNum, 4).setValue('pwd$' + newHash.salt + '$' + newHash.hash);
+  invalidateInitialDataCache_();
+  return { status: 'success', message: 'تم تحديث الحساب «' + name + '» بنجاح.' };
+}
+
+function deleteUser(payload) {
+  payload = payload || {};
+  const actorRole = String(payload.role || '').trim().toLowerCase();
+  if (actorRole !== 'admin') throw new Error('صلاحية إدارة المستخدمين مخصصة للإداري (admin) فقط');
+  const norm = s => String(s || '').trim().toLowerCase();
+  const actorUsername = String(payload.actorUsername || '').trim().toLowerCase();
+  const editUsername = String(payload.editUsername || '').trim().toLowerCase();
+  if (!editUsername) throw new Error('معرّف الحساب مطلوب');
+  const rows = employeesRows_();
+  let targetIndex = -1;
+  for (let i = 0; i < rows.length; i++) {
+    if (norm(rows[i][2]) === editUsername) { targetIndex = i; break; }
+  }
+  if (targetIndex === -1) throw new Error('الحساب غير موجود');
+  if (actorUsername !== '' && norm(rows[targetIndex][2]) === actorUsername) throw new Error('لا يمكنك حذف حسابك بنفسك');
+  const countAdmins = rows.filter(r => norm(r[4]) === 'admin').length;
+  if (norm(rows[targetIndex][4]) === 'admin' && countAdmins <= 1) throw new Error('لا يمكن حذف آخر حساب إداري');
+  aSheet.getSheetByName('Employees').deleteRow(targetIndex + 2);
+  invalidateInitialDataCache_();
+  return { status: 'success', message: 'تم حذف الحساب.' };
 }

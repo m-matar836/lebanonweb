@@ -12,10 +12,10 @@
     <link rel="dns-prefetch" href="https://cdnjs.cloudflare.com">
     <link rel="dns-prefetch" href="https://code.jquery.com">
     <link rel="dns-prefetch" href="https://unpkg.com">
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.1.1/css/all.min.css">
-    <link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/select2-bootstrap-5-theme@1.3.0/dist/select2-bootstrap-5-theme.rtl.min.css" />
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-rbsA2VBKQhggwzxH7pPCaAqO46MgnOM80zW1RWuH61DGLwZJEdK2Kadq2F9CUG65" crossorigin="anonymous">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.1.1/css/all.min.css" integrity="sha384-/frq1SRXYH/bSyou/HUp/hib7RVN1TawQYja658FEOodR/FQBKVqT9Ol+Oz3Olq5" crossorigin="anonymous" referrerpolicy="no-referrer">
+<link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" integrity="sha384-OXVF05DQEe311p6ohU11NwlnX08FzMCsyoXzGOaL+83dKAb3qS17yZJxESl8YrJQ" crossorigin="anonymous" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/select2-bootstrap-5-theme@1.3.0/dist/select2-bootstrap-5-theme.rtl.min.css" integrity="sha384-dHmYdBULIlN1UT/7MFm1UJxGu3C9ZSlZsdfWUpvgCU1wIvwTX2vzDO45ndkHLFgS" crossorigin="anonymous" />
     <link rel="stylesheet" href="style.css">
     <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
     <link rel="manifest" href="manifest.json">
@@ -98,6 +98,7 @@
                         </li>
                         <li class="nav-item"><a class="nav-link nav-link-attendance" data-route="attendance" href="#/attendance"><i class="fa-solid fa-user-clock me-1"></i>الدوام</a></li>
                         <li class="nav-item"><a class="nav-link nav-link-dashboard" data-route="dashboard" href="#/dashboard"><i class="fa-solid fa-chart-line me-1"></i>التحليلات</a></li>
+<li class="nav-item"><a class="nav-link nav-link-users" data-route="users" href="#/users" style="display:none;"><i class="fa-solid fa-users-gear me-1"></i>المستخدمون</a></li>
                     </ul>
                     <div class="d-flex align-items-center me-auto">
                         <button type="button" class="btn btn-sm btn-outline-primary me-2" data-refresh-cache title="جلب أحدث البيانات من Google Sheets">
@@ -1076,13 +1077,101 @@
                 </div>
             </section>
 
+        <!-- ============ إدارة المستخدمين (V68) ============ -->
+        <section id="view-users" class="d-none">
+            <div class="card shadow-sm">
+                <div class="card-header bg-white d-flex flex-wrap justify-content-between align-items-center gap-2">
+                    <h5 class="mb-0"><i class="fa-solid fa-users-gear me-1"></i> إدارة المستخدمين والصلاحيات</h5>
+                    <button type="button" class="btn btn-primary btn-sm" id="addUserBtn"><i class="fa-solid fa-user-plus me-1"></i> مستخدم جديد</button>
+                </div>
+                <div class="card-body">
+                    <div class="mb-3">
+                        <input type="search" id="usersSearchInput" class="form-control" placeholder="بحث بالاسم أو اسم الدخول...">
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table table-hover align-middle" id="usersTable">
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>الاسم</th>
+                                    <th>اسم الدخول</th>
+                                    <th>الصلاحية</th>
+                                    <th>المهمة</th>
+                                    <th>المدير المسؤول</th>
+                                    <th>الإجراءات</th>
+                                </tr>
+                            </thead>
+                            <tbody id="usersTableBody">
+                                <tr><td colspan="7" class="text-center text-muted"><i class="fa-solid fa-spinner fa-spin me-1"></i> جاري التحميل...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div id="usersStatusMsg" class="small mt-2"></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============ نافذة مستخدم جديد / تعديل (V68) ============ -->
+        <div class="modal fade" id="userModal" tabindex="-1" aria-labelledby="userModalLabel" aria-hidden="true">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <form id="userForm" autocomplete="off">
+                        <div class="modal-header">
+                            <h5 class="modal-title" id="userModalLabel">مستخدم جديد</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                        </div>
+                        <div class="modal-body">
+                            <input type="hidden" id="userFormId">
+                            <div class="mb-3">
+                                <label class="form-label">الاسم الكامل</label>
+                                <input type="text" class="form-control" id="userNameInput" required maxlength="100" autocomplete="off">
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">اسم الدخول</label>
+                                <input type="text" class="form-control" id="userUsernameInput" required minlength="3" maxlength="50" autocomplete="off">
+                                <div class="form-text">حروف إنجليزية، أرقام، أو ._- فقط (٣-٥٠ خانة). لا يمكن تغييره بعد الإنشاء.</div>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">كلمة المرور</label>
+                                <input type="password" class="form-control" id="userPasswordInput" autocomplete="new-password">
+                                <div class="form-text" id="userPasswordHint">كلمة مرور جديدة (٤ أحرف على الأقل). تُترك فارغة عند التعديل للإبقاء على الحالية.</div>
+                            </div>
+                            <div class="row g-3">
+                                <div class="col-md-6">
+                                    <label class="form-label">الصلاحية</label>
+                                    <select class="form-select" id="userRoleInput">
+                                        <option value="user">مستخدم (إدخال فقط)</option>
+                                        <option value="manager">مدير</option>
+                                        <option value="auditor">مدقق</option>
+                                        <option value="admin">إداري</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label">المهمة</label>
+                                    <input type="text" class="form-control" id="userJobInput" maxlength="100" placeholder="مثال: مروج، منسق نقطة، مسؤول جرد">
+                                </div>
+                            </div>
+                            <div class="mt-3">
+                                <label class="form-label">المدير المسؤول</label>
+                                <input type="text" class="form-control" id="userManagerInput" maxlength="100" placeholder="الاسم أو الجهة المسؤولة">
+                            </div>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">إلغاء</button>
+                            <button type="submit" class="btn btn-primary" id="saveUserBtn"><i class="fa-solid fa-floppy-disk me-1"></i> حفظ</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+
         </main>
     </div>
 
-    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://code.jquery.com/jquery-3.6.0.min.js" integrity="sha384-vtXRMe3mGCbOeY7l30aIg8H9p3GdeSe4IFlP6G8JMa7o7lXvnz3GFKzPxzJdPfGK" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/js/bootstrap.bundle.min.js" integrity="sha384-kenU1KFdBIe4zVF0s0G1M5b4hcpxyD9F7jL+jjXkk+Q2h455rYXK/7HAuoJl+0I4" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js" integrity="sha384-d3UHjPdzJkZuk5H3qKYMLRyWLAQBJbby2yr2Q58hXXtAGF8RSNO9jpLDlKKPv5v3" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" integrity="sha384-9nhczxUqK87bcKHh20fSQcTGD4qq5GhayNYSYWqwBkINBhOfQLg/P5HG5lF1urn4" crossorigin="anonymous"></script>
     <script src="core.js"></script>
     <script src="page-login.js"></script>
     <script src="page-reports.js"></script>
@@ -1090,6 +1179,7 @@
     <script src="page-movement.js"></script>
     <script src="page-attendance.js"></script>
     <script src="page-dashboard.js"></script>
+    <script src="page-users.js"></script>
     <script>
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => navigator.serviceWorker.register('./service-worker.js').catch(console.warn));
