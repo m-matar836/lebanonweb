@@ -1,7 +1,7 @@
 // ===================================================================
-// Service Worker V48 — Smart cache / offline-first / fast navigation
+// Service Worker V49 — Smart cache / offline-first / fast navigation
 // ===================================================================
-const CACHE_NAME = 'festival-app-v48-spa';
+const CACHE_NAME = 'festival-app-v49-spa';
 const APP_SHELL = [
   './index.html',
   './style.css','./core.js','./page-login.js','./page-reports.js','./page-history.js','./page-dashboard.js','./page-movement.js','./page-attendance.js','./page-users.js','./manifest.json','./icons/icon.svg',
@@ -74,6 +74,24 @@ self.addEventListener('message', event => {
   })());
 });
 
+// V49: الشبكة أولاً للسكربتات المحلية والتنقل (أي صياغة تُعدَّل تظهر فوراً ولو بعد أول
+// تحديث)، أما أصول CDN الثابتة فتبقى cache-first لأنها محمية بـ SRI ولا تتغير.
+const SW_ORIGIN = self.location.origin;
+function isLocalScriptUrl(url) {
+  return url.origin === SW_ORIGIN && /\.(?:js)$/i.test(url.pathname);
+}
+async function networkFirstHandler(event, request, cache) {
+  const cached = await cache.match(request);
+  try {
+    const fresh = await fetch(request);
+    if (fresh && fresh.ok) await cache.put(request, fresh.clone());
+    return fresh;
+  } catch (e) {
+    if (cached) return cached;
+    if (request.mode === 'navigate') return (await cache.match('./index.html')) || new Response('', { status: 503 });
+    return new Response('', { status: 503 });
+  }
+}
 self.addEventListener('fetch', event => {
   const request=event.request;
   if(request.method!=='GET') return;
@@ -114,9 +132,12 @@ self.addEventListener('fetch', event => {
     })());
     return;
   }
-  // Static resources: cache-first with background refresh.
+  // Static resources: network-first for local scripts/navigations, cache-first for the rest.
   event.respondWith((async()=>{
     const cache=await caches.open(CACHE_NAME);
+    if (isLocalScriptUrl(url) || request.mode === 'navigate') {
+      return await networkFirstHandler(event, request, cache);
+    }
     const cached=await cache.match(request);
     const refresh=cacheNetworkResponse(cache,request);
     if(cached){ event.waitUntil(refresh.catch(()=>{})); return cached; }

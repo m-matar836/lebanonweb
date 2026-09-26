@@ -63,7 +63,7 @@ async function handleMaterialsMovementPage() {
         if (!DB || !DB.products) return [];
         const map = new Map();
         Object.values(DB.products).flat().forEach(p => {
-            if (p && p.name && String(p.category ?? '').trim() === 'مادة بيعية' && !isCancelledProduct(p) && !map.has(p.name)) {
+            if (p && p.name && String(p.category ?? '').trim() === 'مادة تذوق' && !isCancelledProduct(p) && !map.has(p.name)) {
                 map.set(p.name, p);
             }
         });

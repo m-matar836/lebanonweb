@@ -379,12 +379,20 @@ ${(isAdmin || isManager || isAuditor) && String(report.approvalStatus || '').tri
             employeeFilterSelect.addEventListener('change', async () => {
                 selectedTargetId = employeeFilterSelect.value || 'all';
                 updateHistoryTitle();
+                reportsAccordion.innerHTML = `<div class="text-center p-4"><i class="fa-solid fa-spinner fa-spin"></i></div>`;
                 if (selectedTargetId === 'all') {
-                    currentReports = memoryReportsCache || [];
-                    renderReports(currentReports);
+                    // الكل: نجلب نطاق الكل من الكاش/الخادم (cachedReportsFetch) بدل الاعتماد
+                    // على memoryReportsCache وحده الذي قد يكون فارغاً إذا ظهرت التقارير من كاش محلي.
+                    try {
+                        const all = await cachedReportsFetch(scopeForAll, { ttlMinutes: 2 });
+                        currentReports = Array.isArray(all) ? all : [];
+                        renderReports(currentReports);
+                    } catch (e) {
+                        currentReports = memoryReportsCache || [];
+                        renderReports(currentReports);
+                    }
                     return;
                 }
-                reportsAccordion.innerHTML = `<div class="text-center p-4"><i class="fa-solid fa-spinner fa-spin"></i></div>`;
                 try {
                     currentReports = await fetchReportsFromServer(selectedTargetId);
                     renderReports(currentReports);
@@ -533,36 +541,47 @@ ${(isAdmin || isManager || isAuditor) && String(report.approvalStatus || '').tri
         const sig = (r) => `${r?.id}|${r?.approvalStatus || ''}`;
         return a.map(sig).join(',') === b.map(sig).join(',');
     };
-    (async () => {
-        try {
-            const fresh = await cachedReportsFetch(scopeForAll, { ttlMinutes: 2 });
-            if (selectedTargetId === 'all' && (!sameReportSet(currentReports, fresh) || !currentReports.length)) {
-                currentReports = fresh;
-                renderReports(currentReports);
-            }
-        } catch (e) {
-            // الكاش المعروض أصلاً يبقى ظاهراً.
-        }
-    })();
-    window.addEventListener('reportsCacheUpdated', (ev) => {
-        if (selectedTargetId !== 'all' || !ev.detail || !Array.isArray(ev.detail.data)) return;
-        if (!sameReportSet(currentReports, ev.detail.data)) {
-            currentReports = ev.detail.data;
+
+    // V69: ربط مستمعي إعادة التحميل قبل الجلب الأول — لو فشل الجلب الأول (خطأ عابر أو
+    // كاش قديم من سيرفر العمال) يبقى ضغط زر «تحديث البيانات» قادراً على إعادة ملء الشاشة.
+    const applyReportsIfChanged = (data) => {
+        if (!Array.isArray(data) || selectedTargetId !== 'all') return;
+        if (!sameReportSet(currentReports, data) || !currentReports.length) {
+            currentReports = data;
             renderReports(currentReports);
         }
+    };
+    const failedReportsNotice = (message) => {
+        reportsAccordion.innerHTML = `<div class="alert alert-warning py-2 mb-2 small"><i class="fa-solid fa-triangle-exclamation me-1"></i>تعذر تحميل السجل (${esc(message || '')}). لا توجد بيانات مخزنة لعرضها — اضغط «تحديث البيانات» أو أعد المحاولة.</div>`;
+    };
+    window.addEventListener('reportsCacheUpdated', (ev) => {
+        if (selectedTargetId !== 'all' || !ev.detail || !Array.isArray(ev.detail.data)) return;
+        applyReportsIfChanged(ev.detail.data);
     });
 
     // بعد زر «تحديث البيانات»: نعرض التقارير المحدَّثة من الكاش المنسّق فوراً (دون شبكة إضافية).
     window.addEventListener('appDataRefreshed', async () => {
-        if (selectedTargetId !== 'all') return;
         try {
             const fresh = await cachedReportsFetch(scopeForAll);
-            if (!sameReportSet(currentReports, fresh)) {
-                currentReports = fresh;
-                renderReports(currentReports);
-            }
+            applyReportsIfChanged(fresh);
         } catch (e) { /* يبقى الكاش المعروض */ }
     });
+
+    let initialFetchRetries = 0;
+    const initialFetchReports = async () => {
+        try {
+            const fresh = await cachedReportsFetch(scopeForAll, { ttlMinutes: 2 });
+            applyReportsIfChanged(fresh);
+        } catch (e) {
+            // الكاش المعروض أصلاً يبقى ظاهراً؛ وإن لم يوجد كاش نعرض رسالة واضحة ونعيد المحاولة.
+            if (!currentReports.length) failedReportsNotice(e?.message || e || 'خطأ في الاتصال');
+            if (initialFetchRetries < 2) {
+                initialFetchRetries += 1;
+                setTimeout(initialFetchReports, 1500);
+            }
+        }
+    };
+    initialFetchReports();
 
     // V58: عند إعادة زيارة شاشة السجل من قائمة التنقل نُحدّث القائمة من الخادم مع
     // الاكتفاء بالكاش عند غياب الاتصال — دون إعادة بناء الواجهة كاملة.

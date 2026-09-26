@@ -135,7 +135,7 @@ function forceLogout(message) {
     navigateTo('login');
 }
 
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwyrWCda3F2RUG07FIESwllS9XLjGrfdwLbj3Ah_xm5IQzreDp7AZ5Gdae-Rj8QAz6o/exec";
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbz5litYpMWlD6WiasjK4yNNaMrPG7i8yzYVe9KTj1T7eBGgtY4KmETBVgyDvYwP4uIi/exec";
 const CACHE_DURATION_MINUTES = 1440;
 const FORM_STATE_KEY = 'reportFormLastState'; 
 const EDIT_STATE_KEY = 'reportToEdit';
@@ -204,6 +204,101 @@ async function handleAuthExpired() {
 function detectAuthFailure(res) {
     if (!res || typeof res !== 'object') return;
     if (res.status === 'error' && res.code === 'unauthorized') handleAuthExpired();
+}
+
+// ===================================================================
+// V69: إشعارات الرفض — عند فتح الموظف حسابه يرى أي تقرير/دوام/حركة مادة مرفوضة
+// (تُشتق مباشرة من حالة الاعتماد في البيانات، دون جدول إشعارات منفصل).
+// ===================================================================
+const REJECTION_DISMISS_KEY = 'rejectedNotificationsDismissed_v1';
+let rejectionCheckInFlight = false;
+
+function rejectionIdsSignature(rejected) {
+    if (!rejected) return '';
+    const mapId = (x) => String(x && (x.id ?? x.timestamp ?? ''));
+    const r = (rejected.reports || []).map(x => 'r' + mapId(x)).join(',');
+    const a = (rejected.attendance || []).map(x => 'a' + mapId(x)).join(',');
+    const m = (rejected.movements || []).map(x => 'm' + mapId(x)).join(',');
+    return r + '|' + a + '|' + m;
+}
+
+async function loadUserRejections() {
+    const user = getStoredUser();
+    if (!user) return { reports: [], attendance: [], movements: [] };
+    const u = String(user.id || ''), r = String(user.role || ''), n = String(user.name || '');
+    const res = await Promise.allSettled([
+        apiGet('getReports', { userId: u, role: r, userName: n, targetUserId: u }),
+        apiGet('getAttendance', { userId: u, role: r, userName: n, targetUserId: u }),
+        apiGet('getUserFestivalMovements', { userId: u, role: r, targetUserId: u })
+    ]);
+    const rejected = { reports: [], attendance: [], movements: [] };
+    if (res[0].status === 'fulfilled' && Array.isArray(res[0].value)) rejected.reports = res[0].value.filter(x => String(x.approvalStatus) === 'rejected');
+    if (res[1].status === 'fulfilled' && Array.isArray(res[1].value)) rejected.attendance = res[1].value.filter(x => String(x.approvalStatus) === 'rejected');
+    if (res[2].status === 'fulfilled' && res[2].value && Array.isArray(res[2].value.movements)) rejected.movements = res[2].value.movements.filter(x => String(x.approvalStatus) === 'rejected');
+    return rejected;
+}
+
+function removeRejectedBanner() {
+    const el = document.getElementById('rejection-notices');
+    if (el) el.innerHTML = '';
+}
+
+function renderRejectedBanner(rejected) {
+    const el = document.getElementById('rejection-notices');
+    if (!el) return;
+    const e = (v) => String(v ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+    const counts = [];
+    if (rejected.reports.length) counts.push(`<strong>${rejected.reports.length}</strong> تقرير مرفوض`);
+    if (rejected.attendance.length) counts.push(`<strong>${rejected.attendance.length}</strong> سجل دوام مرفوض`);
+    if (rejected.movements.length) counts.push(`<strong>${rejected.movements.length}</strong> حركة مادة مرفوضة`);
+    if (!counts.length) { removeRejectedBanner(); return; }
+    const lines = [];
+    if (rejected.reports.length) {
+        const x = rejected.reports[0];
+        lines.push(`<li><i class="fa-solid fa-file-circle-xmark me-1"></i>تقرير رقم <b>${e(x.id)}</b> (${e(x.date || '')}) — السبب: <b>${e(x.rejectionReason || 'غير مذكور')}</b> — بواسطة ${e(x.rejectionBy || 'غير معروف')}</li>`);
+    }
+    if (rejected.attendance.length) {
+        const x = rejected.attendance[0];
+        lines.push(`<li><i class="fa-solid fa-clock me-1"></i>سجل دوام <b>${e(x.timestamp || '')}</b> — السبب: <b>${e(x.rejectionReason || 'غير مذكور')}</b> — بواسطة ${e(x.rejectionBy || 'غير معروف')}</li>`);
+    }
+    if (rejected.movements.length) {
+        const x = rejected.movements[0];
+        lines.push(`<li><i class="fa-solid fa-box-open me-1"></i>حركة مادة <b>${e(x.item || '')}</b> — السبب: <b>${e(x.rejectionReason || 'غير مذكور')}</b> — بواسطة ${e(x.rejectionBy || 'غير معروف')}</li>`);
+    }
+    el.innerHTML = `<div class="alert alert-danger d-flex justify-content-between align-items-start rounded-3 shadow-sm mb-0">
+        <div>
+            <i class="fa-solid fa-circle-exclamation me-1"></i><strong>لديك ${counts.join('، ')}</strong>
+            <ul class="mb-0 mt-1 small ps-3">${lines.join('')}</ul>
+        </div>
+        <button type="button" class="btn-close" aria-label="إخفاء الإشعار"></button>
+    </div>`;
+    const closeBtn = el.querySelector('.btn-close');
+    if (closeBtn) closeBtn.addEventListener('click', () => {
+        el.innerHTML = '';
+        try {
+            const user = getStoredUser();
+            const userKey = 'u' + (user ? (user.id || user.name || '') : '');
+            localStorage.setItem(REJECTION_DISMISS_KEY, userKey + '::' + rejectionIdsSignature(rejected));
+        } catch (e2) {}
+    });
+}
+
+async function checkRejections({ force = false } = {}) {
+    if (rejectionCheckInFlight) return;
+    const user = getStoredUser();
+    if (!user) { removeRejectedBanner(); return; }
+    rejectionCheckInFlight = true;
+    try {
+        const rejected = await loadUserRejections();
+        const sig = rejectionIdsSignature(rejected);
+        if (!sig) { removeRejectedBanner(); return; }
+        const userKey = 'u' + String(user.id || user.name || '');
+        try {
+            const dismissed = localStorage.getItem(REJECTION_DISMISS_KEY);
+            if (!force && dismissed && dismissed === userKey + '::' + sig) { removeRejectedBanner(); return; }
+        } catch (e0) {}
+        renderRejectedBanner(rejected);
+    } finally { rejectionCheckInFlight = false; }
 }
 
 // GET عبر jQuery (مع احتياطي fetch).
@@ -768,6 +863,8 @@ function bindShellUserControls() {
             localStorage.removeItem(FORM_STATE_KEY);
             sessionStorage.removeItem(EDIT_STATE_KEY);
             invalidateSmartCaches();
+            // V69: حذف لافتة إشعارات الرفض عند تسجيل الخروج.
+            removeRejectedBanner();
             // إعادة ضبط حالة الشاشات حتى تُبنى من جديد ببيانات المستخدم التالي عند الدخول.
             Object.keys(viewMounted).forEach(k => delete viewMounted[k]);
             currentRoute = null;
@@ -849,6 +946,8 @@ document.addEventListener('DOMContentLoaded', () => {
     initPwaInstall();
     startSessionTimeout();
     activateRoute();
+    // V69: جلسة قائمة مسبقاً — إشعار المرفوضات يظهر فور فتح التطبيق.
+    checkRejections();
     window.addEventListener('hashchange', activateRoute);
 });
 
@@ -918,7 +1017,8 @@ function invalidateSmartCaches() {
             if (k.startsWith(SMART_CACHE_PREFIX) || k.startsWith('attendanceCache::') || k === 'attendanceStatusCache') localStorage.removeItem(k);
         });
     } catch (e) {}
-    try { caches?.keys?.().then(keys => keys.filter(k => k.includes('festival-app-v4')).forEach(k => caches.delete(k))).catch(()=>{}); } catch(e) {}
+    // V49: امسح فقط كاشات المهرجان القديمة (v4..p الأقدم) دون حذف كاش النسخة الحالية.
+    try { caches?.keys?.().then(keys => keys.filter(k => k.startsWith('festival-app-v4') && !k.startsWith('festival-app-v49')).forEach(k => caches.delete(k))).catch(()=>{}); } catch(e) {}
 }
 
 const APP_DB_TS_KEY = `dbCacheTimestamp_${APP_DB_VERSION}`;
@@ -960,6 +1060,8 @@ async function refreshAppCache({ silent = false } = {}) {
         window.dispatchEvent(new CustomEvent('attendanceCacheInvalidated'));
         // حدث موحّد: كل الشاشات المفتوحة تعيد تحميل بياناتها بعد انتهاء التحديث.
         window.dispatchEvent(new CustomEvent('appDataRefreshed'));
+        // V69: بعد تحديث شامل قد تظهر مرفوضات جديدة — تحدّث الإشعار (يحترم الإخفاء السابق لنفس المجموعة).
+        checkRejections();
         if(navigator.serviceWorker?.getRegistrations) navigator.serviceWorker.getRegistrations().then(regs=>Promise.all(regs.map(reg=>reg.update()))).catch(()=>{});
         buttons.forEach(btn=>{btn.classList.remove('btn-outline-primary');btn.classList.add('btn-outline-success');btn.innerHTML='<i class="fa-solid fa-check me-1"></i>تم تحديث كل البيانات';});
         setTimeout(()=>buttons.forEach(btn=>{btn.classList.remove('btn-outline-success');btn.classList.add('btn-outline-primary');btn.innerHTML=btn.dataset.originalHtml||'<i class="fa-solid fa-arrows-rotate me-1"></i>تحديث البيانات';btn.disabled=false;}),1800);

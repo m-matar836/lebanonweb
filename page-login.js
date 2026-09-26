@@ -54,7 +54,11 @@ async function handleLoginPage() {
                 }
             }
             // V45/V46: حساب "user" ومنصبه "مروج" ينتقل للدوام، بقية الأدوار لشاشة التقارير.
-            setTimeout(() => { navigateTo(isPromoterAccount(loginResult.user) ? 'attendance' : 'reports'); }, 1000);
+            setTimeout(() => {
+                navigateTo(isPromoterAccount(loginResult.user) ? 'attendance' : 'reports');
+                // V69: إشعار المرفوضات يظهر عند فتح الحساب بعد الدخول (تقرير/دوام/حركة مادة مرفوضة).
+                if (typeof checkRejections === 'function') checkRejections({ force: true });
+            }, 1000);
         } catch (error) {
             errorMessage.textContent = 'اسم المستخدم أو كلمة المرور غير صحيحة.';
             submitBtn.disabled = false;
