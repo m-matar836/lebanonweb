@@ -568,6 +568,18 @@ ${(isAdmin || isManager || isAuditor) && String(report.approvalStatus || '').tri
         }
     });
 
+    // بعد زر «تحديث البيانات»: نعرض التقارير المحدَّثة من الكاش المنسّق فوراً (دون شبكة إضافية).
+    window.addEventListener('appDataRefreshed', async () => {
+        if (selectedTargetId !== 'all') return;
+        try {
+            const fresh = await cachedReportsFetch(scopeForAll);
+            if (!sameReportSet(currentReports, fresh)) {
+                currentReports = fresh;
+                renderReports(currentReports);
+            }
+        } catch (e) { /* يبقى الكاش المعروض */ }
+    });
+
     // V58: عند إعادة زيارة شاشة السجل من قائمة التنقل نُحدّث القائمة من الخادم مع
     // الاكتفاء بالكاش عند غياب الاتصال — دون إعادة بناء الواجهة كاملة.
     window.addEventListener('spaViewRevisited', async (event) => {

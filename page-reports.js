@@ -462,7 +462,7 @@ async function handleReportPage() {
 
     const populateEmployees = (report = {}) => {
         const inventoryStaff = DB.employees.filter(e => e.role === 'مسؤول جرد').map(e => e.name);
-        const coordinators = DB.employees.filter(e => e.role === 'منسق نقطة').map(e => e.name);
+        const coordinators = DB.employees.filter(e => e.role === 'منسق نقطة' || e.role === 'مسؤول جرد').map(e => e.name);
         populateSelect(document.getElementById('inventoryDependency'), inventoryStaff, report.inventoryDependency);
         populateSelect(document.getElementById('coordinator'), coordinators, report.coordinator);
         const reportPromoters = Array.isArray(report.promoters)
@@ -482,19 +482,25 @@ async function handleReportPage() {
         const s = String(value ?? '').trim();
         return s === 'مروج' || s === 'مروّج' || /^(promoter|promoters)$/i.test(s);
     };
+    const isCoordinatorRoleValue = (value) => {
+        const s = String(value ?? '').trim();
+        return s === 'منسق نقطة' || /^(coordinator|coordinators)$/i.test(s);
+    };
     const renderPromotersSelection = () => {
         const employees = Array.isArray(DB && DB.employees) ? DB.employees : [];
+        const supervisorName = (supervisorInput?.value || '').trim();
         let promoters = employees
-            .filter(e => e && isPromoterRoleValue(e.role ?? e.jobPosition ?? ''))
+            .filter(e => e && (isPromoterRoleValue(e.role ?? e.jobPosition ?? '') || isCoordinatorRoleValue(e.role ?? e.jobPosition ?? '')))
             .map(e => String(e.name ?? '').trim())
             .filter(isValidPromoterName)
             .filter((name, index, arr) => arr.indexOf(name) === index);
-        // لو لم يوجد موظف مصنّف "مروج" نعرض كل الأسماء حتى لا تبقى القائمة فارغة إطلاقاً.
-        if (!promoters.length && employees.length) {
-            promoters = employees
+        // كل الموظفين التابعين للمشرف المعروض في خانة "المشرف" يُضافون للقائمة.
+        if (supervisorName) {
+            const teamNames = employees
+                .filter(e => e && String(e.mgr ?? '').trim() === supervisorName)
                 .map(e => String(e.name ?? '').trim())
-                .filter(isValidPromoterName)
-                .filter((name, index, arr) => arr.indexOf(name) === index);
+                .filter(isValidPromoterName);
+            promoters = [...promoters, ...teamNames].filter((name, index, arr) => arr.indexOf(name) === index);
         }
         const selected = new Set(getSelectedPromoters());
         promotersSelectionTbody.innerHTML = '';

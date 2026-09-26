@@ -987,6 +987,9 @@ ${dots}
         await refreshDashboard({ force: true });
     });
 
+    // بعد زر «تحديث البيانات»: إعادة تحميل التحليلات من الخادم القيم.
+    window.addEventListener('appDataRefreshed', () => { refreshDashboard({ force: true }); });
+
     await refreshDashboard();
     await refreshGoals();
 

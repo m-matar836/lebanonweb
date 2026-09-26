@@ -900,6 +900,8 @@ async function refreshAppCache({ silent = false } = {}) {
         window.dispatchEvent(new CustomEvent('reportsCacheInvalidated'));
         window.dispatchEvent(new CustomEvent('movementCacheInvalidated'));
         window.dispatchEvent(new CustomEvent('attendanceCacheInvalidated'));
+        // حدث موحّد: كل الشاشات المفتوحة تعيد تحميل بياناتها بعد انتهاء التحديث.
+        window.dispatchEvent(new CustomEvent('appDataRefreshed'));
         if(navigator.serviceWorker?.getRegistrations) navigator.serviceWorker.getRegistrations().then(regs=>Promise.all(regs.map(reg=>reg.update()))).catch(()=>{});
         buttons.forEach(btn=>{btn.classList.remove('btn-outline-primary');btn.classList.add('btn-outline-success');btn.innerHTML='<i class="fa-solid fa-check me-1"></i>تم تحديث كل البيانات';});
         setTimeout(()=>buttons.forEach(btn=>{btn.classList.remove('btn-outline-success');btn.classList.add('btn-outline-primary');btn.innerHTML=btn.dataset.originalHtml||'<i class="fa-solid fa-arrows-rotate me-1"></i>تحديث البيانات';btn.disabled=false;}),1800);

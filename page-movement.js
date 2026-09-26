@@ -394,6 +394,13 @@ async function handleMaterialsMovementPage() {
         await refreshMovementsAndSummary(viewingTargetId);
     });
 
+    // بعد زر «تحديث البيانات»: نُحدّث محصلة الشاشة المفتوحة حالاً.
+    window.addEventListener('appDataRefreshed', () => {
+        if (!currentUser) return;
+        updateMovementScopeUI();
+        refreshMovementsAndSummary(viewingTargetId).catch(() => {});
+    });
+
     await refreshMovementsAndSummary(viewingTargetId);
 }
 
