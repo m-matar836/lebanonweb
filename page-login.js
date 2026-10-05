@@ -39,13 +39,8 @@ async function handleLoginPage() {
             // التوثيق يبقى طلباً خفيفاً، والصفحة الهدف تستخدم الكاش المحلي فوراً
             // أو تجلب البيانات في مسارها الخاص. هذا يمنع Google Apps Script من
             // حجز استجابة الدخول على قراءة Products/Employees/Locations كاملة.
-            if (loginResult.db && typeof window.memoryDbCache !== 'undefined') {
-                memoryDbCache = loginResult.db;
-                try {
-                    localStorage.setItem(appDbCacheKey(), JSON.stringify(loginResult.db));
-                    localStorage.setItem(appDbCacheTsKey(), String(Date.now()));
-                } catch (e) { /* امتلاء التخزين */ }
-            }
+            // V74: doLogin no longer carries the potentially large initial-data payload.
+            // getDbData() loads the user-scoped browser cache or fetches it after routing.
             errorMessage.textContent = 'تم التحقق بنجاح! جارٍ التحويل...';
             errorMessage.style.color = '#2ecc71';
             // V50: تسجيل الجلسة في دفتر الجلسات المحلي — مع إشعار عند الدخول من جهاز جديد.
@@ -78,8 +73,17 @@ async function handleLoginPage() {
                 if (typeof checkRejections === 'function') checkRejections({ force: true });
                 if (typeof checkTeamEntryFeed === 'function') checkTeamEntryFeed();
             };
-            if (typeof afterFirstScreen === 'function') afterFirstScreen(notifyAfterLogin, 2000);
-            else notifyAfterLogin();
+            if (typeof afterFirstScreen === 'function') {
+                afterFirstScreen(() => {
+                    if (typeof startDataVersionWatch === 'function') startDataVersionWatch();
+                    if (typeof checkServerDataVersion === 'function') checkServerDataVersion();
+                }, 1200);
+                afterFirstScreen(notifyAfterLogin, 2000);
+            } else {
+                if (typeof startDataVersionWatch === 'function') startDataVersionWatch();
+                if (typeof checkServerDataVersion === 'function') checkServerDataVersion();
+                notifyAfterLogin();
+            }
         } catch (error) {
             errorMessage.textContent = 'اسم المستخدم أو كلمة المرور غير صحيحة.';
             submitBtn.disabled = false;

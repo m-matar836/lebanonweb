@@ -163,7 +163,7 @@ async function forceLogout(message) {
     navigateTo('login');
 }
 
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyvgZnLWj1jAgfDHxR1tAuwto0CIcYEOMEW9nylS6_8OpOsnGspuxPsHtiZO0YIHMSQ/exec";
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbytpux3D7lenC3U9f8S_gZV9nepduBusUQ_kkAbwal46HgdJUSf8tEC3xr-ugW0dU6u/exec";
 const CACHE_DURATION_MINUTES = 1440;
 // V70: مسودّات المستخدم مربوطة بهويته. لو بقيت بمفتاح واحد لصاحب الجلسة
 // السابقة استعاد مستخدمٌ آخر مسودّة غيره (أو النقطة الأخيرة التي اختارها).
@@ -1421,13 +1421,16 @@ document.addEventListener('DOMContentLoaded', () => {
     afterFirstScreen(() => checkTeamEntryFeed(), 3000);
     afterFirstScreen(() => warmChartLibWhenIdle(), 3500);
     window.addEventListener('hashchange', activateRoute);
-    // V72: مطابقة حالة التطبيق مع الشيت. الفحص الأول فوري لأن المستخدم قد يكون
-    // عدّل شيتاً والتطبيق مغلق، في هذه اللحظة يحتاج بيانات صحيحة لا قديمة.
-    startDataVersionWatch();
-    checkServerDataVersion();
+    // V74: لا نرسل فحص إصدار الشيت قبل الدخول؛ الطلب كان ينافس doLogin على نفس
+    // اتصال Apps Script بلا فائدة للمستخدم غير الموثّق. يبدأ الفحص مباشرة عند
+    // وجود جلسة محفوظة، أو بعد الدخول بعد ظهور الشاشة الأولى.
+    if (getStoredUser()) {
+        startDataVersionWatch();
+        checkServerDataVersion();
+    }
     // العودة إلى التبويب هي أكثر لحظة يعود فيها المستخدم بعد تعديل ورقة.
     document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState !== 'visible') return;
+        if (document.visibilityState !== 'visible' || !getStoredUser()) return;
         checkServerDataVersion();
     });
 });

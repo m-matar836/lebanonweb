@@ -85,6 +85,7 @@ function cachePutChunked_(baseKey, json, seconds) {
 /** The one call every invalidation site should make for initial data. */
 function clearInitialDataCache_() {
   try { cacheClearChunked_(INITIAL_DATA_CACHE_KEY); } catch (e) {}
+  clearEmployeeAuthCache_();
 }
 
 // Same trap, second payload. `allReports` grows with every report ever filed,
@@ -293,6 +294,34 @@ function getDataSyncStatus() {
 const SESSION_CACHE_PREFIX_ = 'sess_';
 const SESSION_DURATION_SECONDS_ = 6 * 60 * 60;
 const SESSION_STORE_ = CacheService.getScriptCache();
+// V74: cache the small Employees authentication dataset so login and every
+// authenticated API call do not reread the Employees sheet from scratch.
+// The cache is invalidated together with the initial-data cache on edits.
+const EMPLOYEE_AUTH_CACHE_KEY_ = 'employeeAuthRows_v2';
+const EMPLOYEE_AUTH_CACHE_SECONDS_ = 600;
+
+function clearEmployeeAuthCache_() {
+  try { SESSION_STORE_.remove(EMPLOYEE_AUTH_CACHE_KEY_); } catch (e) {}
+}
+
+function getEmployeeAuthRows_() {
+  try {
+    const cached = SESSION_STORE_.get(EMPLOYEE_AUTH_CACHE_KEY_);
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch (e) {}
+
+  const sheet = aSheet.getSheetByName("Employees");
+  if (!sheet || sheet.getLastRow() < 2) return [];
+  const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, 7).getValues();
+  try {
+    const json = JSON.stringify(rows);
+    if (json.length < 90 * 1024) SESSION_STORE_.put(EMPLOYEE_AUTH_CACHE_KEY_, json, EMPLOYEE_AUTH_CACHE_SECONDS_);
+  } catch (e) {}
+  return rows;
+}
 
 // Brute force protection
 const LOGIN_ATTEMPTS_PREFIX_ = 'login_attempts_';
@@ -309,10 +338,8 @@ function unauthorizedError_(message) {
 
 // قراءة صف الموظف من ملف Employees — المصدر الموثوق للهوية والدور والمنصب.
 function getEmployeeByIdOrUsername_(value) {
-  const sheet = aSheet.getSheetByName("Employees");
-  if (!sheet || sheet.getLastRow() < 2) return null;
   const v = String(value || '').trim();
-  const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 7).getValues();
+  const data = getEmployeeAuthRows_();
   for (let i = 0; i < data.length; i++) {
     const row = data[i];
     const rowId = String(row[0] || '').trim();
@@ -983,9 +1010,8 @@ function isLoginLockedOut_(username) {
 }
 
 function doLogin(payload) {
-  const sheet = aSheet.getSheetByName("Employees");
-  if (!sheet || sheet.getLastRow() < 2) throw new Error("لا توجد بيانات موظفين");
-  const usersData = sheet.getRange(2,1,sheet.getLastRow()-1,7).getValues();
+  const usersData = getEmployeeAuthRows_();
+  if (!usersData.length) throw new Error("لا توجد بيانات موظفين");
   const inputUsernameLower = String(payload.username || '').toLowerCase();
   const inputPassword = String(payload.password || '');
 
@@ -1020,7 +1046,9 @@ function doLogin(payload) {
     // ترقية تلقائية لكلمات المرور النصية القديمة إلى hash (مرة واحدة لكل مستخدم).
     if (stored.indexOf('pwd$') !== 0) {
       const { salt, hash } = hashPassword_(inputPassword);
-      sheet.getRange(i + 2, 4).setValue('pwd$' + salt + '$' + hash);
+      const sheet = aSheet.getSheetByName("Employees");
+      if (sheet) sheet.getRange(i + 2, 4).setValue('pwd$' + salt + '$' + hash);
+      try { row[3] = 'pwd$' + salt + '$' + hash; SESSION_STORE_.put(EMPLOYEE_AUTH_CACHE_KEY_, JSON.stringify(usersData), EMPLOYEE_AUTH_CACHE_SECONDS_); } catch (e) {}
     }
     // V42: المعرّف للواجهة = عمود id، وإن كان فارغاً نعتمد على username كبديل حتى
     // تُبنى صلاحيات المدير (الفريق) بشكل صحيح حتى لمن لم يملأ عمود id.
@@ -1033,11 +1061,9 @@ function doLogin(payload) {
     // CSRF: generate and store a CSRF token tied to this session
     const csrfToken = Utilities.getUuid().replace(/-/g, '');
     try { SESSION_STORE_.put('csrf_' + session.token, csrfToken, SESSION_DURATION_SECONDS_); } catch (e) {}
-    // V74: لا نعيد بناء قاعدة البيانات أثناء تسجيل الدخول.
-    // إن كانت موجودة في كاش الخادم نمررها، وإلا تكمل الصفحة الهدف تحميلها لاحقاً.
-    let initDb = null;
-    try { initDb = cacheGetChunked_(INITIAL_DATA_CACHE_KEY); } catch (e) { initDb = null; }
-    return {status:"success", token: session.token, csrfToken: csrfToken, expiresAt: session.expiresAt, db: initDb, user:{
+    // V74: استجابة الدخول صغيرة عمداً. لا نرسل getInitialData (قد تكون مئات الكيلوبايت)
+    // داخل طلب المصادقة؛ الشاشة الهدف تقرأ كاش المتصفح أو تجلب البيانات مباشرة بعد الدخول.
+    return {status:"success", token: session.token, csrfToken: csrfToken, expiresAt: session.expiresAt, user:{
       id: rawId || rawUsername,
       username: rawUsername,
       role: String(row[4] || '').trim().toLowerCase(),
@@ -1088,9 +1114,8 @@ function normalizeName_(value) {
 // V42: قراءة بيانات حسابات الموظفين من صفحة "Employees" (لم تعد صفحة Users موجودة).
 // الأعمدة: A=id، B=name، C=username، D=password، E=role، F=jobPosition، G=mgr.
 function getUsersLite() {
-  const sheet = aSheet.getSheetByName('Employees');
-  if (!sheet || sheet.getLastRow() < 2) return [];
-  const data = sheet.getRange(2,1,sheet.getLastRow()-1,7).getValues();
+  const data = getEmployeeAuthRows_();
+  if (!data.length) return [];
   return data
     .map(row => {
       const rawId = String(row[0] ?? '').trim();

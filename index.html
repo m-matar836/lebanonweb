@@ -39,7 +39,7 @@
                 <div class="form-header">
                     <!-- الأبعاد ثابتة مسبقاً: بدونها يقفز التخطيط عند وصول الصورة، وهو ما
     يهمّ على شبكة الجوال. -->
-<img src="https://cdn-icons-png.flaticon.com/512/295/295128.png" alt="شعار الدخول" width="96" height="96" decoding="async" fetchpriority="low">
+<img src="https://cdn-icons-png.flaticon.com/512/295/295128.png" alt="شعار الدخول" width="96" height="96" decoding="async" fetchpriority="high">
                     <h2>تسجيل الدخول</h2>
                     <p>أهلاً بك! يرجى إدخال بياناتك للمتابعة.</p>
                 </div>
@@ -1562,14 +1562,14 @@
      الخلفية لأصحاب الصلاحية)، فيسقط ثلث الحمولة عن شاشة الدخول وبقية الشاشات. -->
     <script src="core.js" defer></script>
     <script src="page-login.js" defer></script>
-    <script src="page-reports.js" defer></script>
-    <script src="page-expenses.js" defer></script>
-    <script src="page-history.js" defer></script>
-    <script src="page-movement.js" defer></script>
-    <script src="page-attendance.js" defer></script>
-<script src="page-dashboard.js" defer></script>
-<script src="page-users.js" defer></script>
-<script src="page-salary.js" defer></script>
+    <script src="page-reports.js" defer fetchpriority="low"></script>
+    <script src="page-expenses.js" defer fetchpriority="low"></script>
+    <script src="page-history.js" defer fetchpriority="low"></script>
+    <script src="page-movement.js" defer fetchpriority="low"></script>
+    <script src="page-attendance.js" defer fetchpriority="low"></script>
+<script src="page-dashboard.js" defer fetchpriority="low"></script>
+<script src="page-users.js" defer fetchpriority="low"></script>
+<script src="page-salary.js" defer fetchpriority="low"></script>
     <script>
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => navigator.serviceWorker.register('./service-worker.js').catch(console.warn));

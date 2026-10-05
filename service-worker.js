@@ -5,9 +5,9 @@
 // v55: إصلاح دالة «تعديل» في السجل (page-history.js) وتحويل style.css إلى 100dvh.
 // v71: تمديد الشبكة الأولى لكل أصول القشرة same-origin، وردّ (ack) على رسالة
 //      CLEAR_APP_CACHE بعد انتهاء الحذف فعلياً بدل إرساله دون انتظار.
-// v73: إزالة حجب الرسم عن سكربتات CDN (defer)، وجلب Chart.js عند فتح التحليلات
-//      فقط، وتأجيل إشعارات ما بعد الدخول عن طلبات الشاشة الأولى.
-const CACHE_NAME = 'festival-app-v73-fast-shell';
+// v73: إزالة حجب الرسم عن سكربتات CDN (defer)، وجلب Chart.js عند فتح التحليلات فقط.
+// v74: تسريع المصادقة وتحسين Mobile/Tablet responsive layout.
+const CACHE_NAME = 'festival-app-v74-fast-mobile';
 const APP_SHELL = [
   './index.html',
   './style.css','./core.js','./page-login.js','./page-reports.js','./page-expenses.js','./page-history.js','./page-dashboard.js','./page-movement.js','./page-attendance.js','./page-users.js','./page-salary.js','./manifest.json','./icons/icon.svg',
