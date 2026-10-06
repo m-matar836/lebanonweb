@@ -112,16 +112,48 @@ async function handleSalaryPage() {
         }
     }
 
-    async function loadHistory() {
-        if (!historyBody) return;
-        historyBody.innerHTML = '<tr><td colspan="7" class="text-center text-muted"><i class="fa-solid fa-spinner fa-spin me-1"></i> جاري التحميل...</td></tr>';
+    const salaryCacheKey = () => {
+        const u = currentUser() || {};
+        return `salaryAdvances::${encodeURIComponent(String(u.id || u.username || 'anon'))}`;
+    };
+    const SALARY_CACHE_TTL_MS = 2 * 60 * 1000;
+    let salaryLoadInFlight = null;
+    async function loadHistory(force = false) {
+        if (!historyBody) return [];
+        const key = salaryCacheKey();
+        let cached = null, timestamp = 0;
         try {
-            const result = await apiGet('getSalaryAdvances', {});
-            if (!result || result.status !== 'success') throw new Error(result?.message || 'تعذر التحميل');
-            renderHistory(Array.isArray(result.advances) ? result.advances : []);
-        } catch (e) {
-            historyBody.innerHTML = `<tr><td colspan="7" class="text-center text-danger">${esc(e.message || e)}</td></tr>`;
+            const raw = localStorage.getItem(key);
+            timestamp = Number(localStorage.getItem(key + ':ts') || 0);
+            if (raw) cached = JSON.parse(raw);
+        } catch (e) {}
+        const hasCache = Array.isArray(cached);
+        const isFresh = hasCache && timestamp > 0 && (Date.now() - timestamp) < SALARY_CACHE_TTL_MS;
+        if (!force && hasCache) {
+            renderHistory(cached);
+            if (isFresh || !navigator.onLine) return cached;
         }
+        if (salaryLoadInFlight && !force) return salaryLoadInFlight;
+        salaryLoadInFlight = (async () => {
+            try {
+                const result = await apiGet('getSalaryAdvances', {});
+                if (!result || result.status !== 'success') throw new Error(result?.message || 'تعذر التحميل');
+                const rows = Array.isArray(result.advances) ? result.advances : [];
+                try {
+                    localStorage.setItem(key, JSON.stringify(rows));
+                    localStorage.setItem(key + ':ts', String(Date.now()));
+                } catch (e) {}
+                renderHistory(rows);
+                return rows;
+            } catch (e) {
+                if (hasCache) { renderHistory(cached); return cached; }
+                historyBody.innerHTML = `<tr><td colspan="7" class="text-center text-danger">${esc(e.message || e)}</td></tr>`;
+                return [];
+            } finally {
+                salaryLoadInFlight = null;
+            }
+        })();
+        return salaryLoadInFlight;
     }
 
     function renderHistory(advances) {
@@ -212,9 +244,10 @@ async function handleSalaryPage() {
             const result = await apiPost('saveSalaryAdvance', { employeeId, amount, type, notes, date, installments, requestId });
             if (!result || result.status !== 'success') throw new Error(result?.message || 'تعذر الحفظ');
             notify(result.message || 'تم حفظ السلفية بنجاح.');
+            try { localStorage.removeItem(salaryCacheKey()); } catch (e) { /* تجاهل فشل التخزين المحلي */ }
             if (isManagerOrAdmin()) form.reset();
             syncInstallmentsVisibility();
-            await loadHistory();
+            await loadHistory(true);
         } catch (err) {
             notify(`خطأ أثناء الحفظ: ${err.message || err}`, true);
         } finally {

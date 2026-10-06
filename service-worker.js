@@ -7,7 +7,8 @@
 //      CLEAR_APP_CACHE بعد انتهاء الحذف فعلياً بدل إرساله دون انتظار.
 // v73: إزالة حجب الرسم عن سكربتات CDN (defer)، وجلب Chart.js عند فتح التحليلات فقط.
 // v74: تسريع المصادقة وتحسين Mobile/Tablet responsive layout.
-const CACHE_NAME = 'festival-app-v74-fast-mobile';
+// v75: history pagination + browser API cache for report pages.
+const CACHE_NAME = 'festival-app-v75-perf-paging';
 const APP_SHELL = [
   './index.html',
   './style.css','./core.js','./page-login.js','./page-reports.js','./page-expenses.js','./page-history.js','./page-dashboard.js','./page-movement.js','./page-attendance.js','./page-users.js','./page-salary.js','./manifest.json','./icons/icon.svg',
@@ -21,7 +22,7 @@ const APP_SHELL = [
   'https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js'
 ];
 const CACHEABLE_API_ACTIONS = new Set([
-  'getInitialData','getReports','getReportById','findProductByBarcode','getCompetitorProducts',
+  'getInitialData','getReports','getReportsPage','getReportById','findProductByBarcode','getCompetitorProducts',
   'getUserFestivalMovements','getTeamOptions','getAttendance','getStatusOptions',
   'getExpensesOptions','getExpensesByDate','getExpensesList'
 ]);

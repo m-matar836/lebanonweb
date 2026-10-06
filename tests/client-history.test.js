@@ -87,6 +87,23 @@ function historyCtx(opts = {}) {
             : s.__serverReports.filter(r => String(r.createdById) === t);
           return rows;
         }
+        if (action === 'getReportsPage') {
+          const t = String((params && params.targetUserId) || 'all');
+          const rows = (t === 'all' ? s.__serverReports
+            : s.__serverReports.filter(r => String(r.createdById) === t)).slice().reverse();
+          const size = Math.max(1, Number((params && params.pageSize) || 20));
+          const page = Math.max(1, Number((params && params.page) || 1));
+          const start = (page - 1) * size;
+          return {
+            status: 'success', page, pageSize: size, total: rows.length,
+            hasMore: start + size < rows.length,
+            items: rows.slice(start, start + size),
+            filterOptions: page === 1 ? {
+              campaigns: [...new Set(rows.map(r => String(r.campaign || '')).filter(Boolean))],
+              events: [...new Set(rows.map(r => String(r.event || '')).filter(Boolean))]
+            } : null
+          };
+        }
         return [];
       };
       s.apiPost = async () => ({ status: 'success' });
@@ -187,6 +204,7 @@ test('history filter: an employee with no reports shows the empty message', asyn
   s.apiGet = async (action, params) => {
     if (action === 'getTeamOptions') return { status: 'success', options: TEAM };
     if (action === 'getReports') return [];
+    if (action === 'getReportsPage') return { status: 'success', page: 1, pageSize: 20, total: 0, hasMore: false, items: [], filterOptions: { campaigns: [], events: [] } };
     return [];
   };
   els.historyEmployeeFilterSelect.value = 'E005';

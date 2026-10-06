@@ -163,7 +163,7 @@ async function forceLogout(message) {
     navigateTo('login');
 }
 
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbytpux3D7lenC3U9f8S_gZV9nepduBusUQ_kkAbwal46HgdJUSf8tEC3xr-ugW0dU6u/exec";
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxNwSaIier8BGDO9nrTcQa8EFJm9S0xsyJ-8uEDqCg2YPjgSKlhlbsIhgelngD6pZAh/exec";
 const CACHE_DURATION_MINUTES = 1440;
 // V70: مسودّات المستخدم مربوطة بهويته. لو بقيت بمفتاح واحد لصاحب الجلسة
 // السابقة استعاد مستخدمٌ آخر مسودّة غيره (أو النقطة الأخيرة التي اختارها).
@@ -248,6 +248,7 @@ const USER_SCOPED_CACHE_PREFIXES = [
     'expensesDraft::', 'lastReportPoint',
     'reportFormLastState', 'reportToEdit',
     'entryFeedSeen_v1::',
+    'salaryAdvances::',
 ];
 
 /** يبني مفتاح كاش لا يشارك فيه إلا صاحب هذه الجلسة. */
@@ -782,6 +783,21 @@ function ajaxGetReports(params = {}) {
     return p;
 }
 
+const reportPagesInflight = {};
+function ajaxGetReportsPage(params = {}) {
+    const key = [
+        reportsScopeKey(params),
+        String(params.page || 1),
+        String(params.pageSize || 20)
+    ].join('__');
+    if (reportPagesInflight[key]) return reportPagesInflight[key];
+    const p = apiGet('getReportsPage', params);
+    reportPagesInflight[key] = p;
+    p.then(() => { if (reportPagesInflight[key] === p) delete reportPagesInflight[key]; },
+           () => { if (reportPagesInflight[key] === p) delete reportPagesInflight[key]; });
+    return p;
+}
+
 function saveReportsCacheEntry(scope, data, params = {}) {
     reportsMemoryByScope[scope] = data;
     try {
@@ -1249,7 +1265,7 @@ function getStoredUser() {
     } catch (e) { return null; }
 }
 
-// V46: حساب role="user" ومنصبه "مروج" مقيَّد بصفحة الدوام حصراً.
+// حساب role="user" ومنصبه "مروج". المروج يملك الدوام والسلف المالية.
 function isPromoterAccount(u) {
     const r = String(u?.role || '').trim().toLowerCase();
     const jp = String(u?.jobPosition || '').trim();
@@ -1340,7 +1356,7 @@ function bindShellUserControls() {
     // V69: التحليلات للمدير (manager) والإداري (admin) فقط — مخفية تماماً عن بقية الأدوار.
     const showDashboard = role === 'admin' || role === 'manager';
     document.querySelectorAll('.nav-link-dashboard').forEach(el => { const it = el.closest('.nav-item'); if (it) it.style.display = showDashboard ? '' : 'none'; });
-    // V46: المروج يرى رابط الدوام فقط (دون شمل dashboard — تُدار وحدها بقاعدة showDashboard لأي دور).
+    // المروج يرى الدوام والسلف المالية، بينما تبقى الشاشات التشغيلية الأخرى مخفية.
     const isPromoter = isPromoterAccount(user);
     document.querySelectorAll('.nav-link-reports, .nav-link-expenses, .nav-link-history, .nav-link-movement').forEach(el => { const it = el.closest('.nav-item'); if (it) it.style.display = isPromoter ? 'none' : ''; });
     // V68: إدارة المستخدمين للإداري (admin) فقط — تُشغَّل بعد القاعدة أعلاه حتى لا يُعاد إظهارها لغير الإداري.
@@ -1353,10 +1369,11 @@ function activateRoute() {
     const user = getStoredUser();
     const prevRoute = currentRoute;
 
-    // حراسة الصلاحيات: بلا جلسة → شاشة الدخول، جلسة على الدخول → الرئيسية، المروج → الدوام.
+    // حراسة الصلاحيات: بلا جلسة → شاشة الدخول، جلسة على الدخول → الرئيسية.
+    // المروج مسموح له بالدوام والسلف المالية فقط.
     if (!user && route !== 'login') route = 'login';
     else if (user && route === 'login') { navigateHome(); return; }
-    else if (user && isPromoterAccount(user) && route !== 'attendance') { navigateTo('attendance'); return; }
+    else if (user && isPromoterAccount(user) && route !== 'attendance' && route !== 'salary') { navigateTo('attendance'); return; }
     // V68: شاشة إدارة المستخدمين للإداري (admin) فقط.
     else if (user && String(user.role || '').trim().toLowerCase() !== 'admin' && route === 'users') { navigateHome(); return; }
     // V69: التحليلات للمدير (manager) والإداري (admin) فقط — منع الدخول المباشر لغيرهم.

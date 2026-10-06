@@ -41,7 +41,7 @@ const pageFiles = () =>
  *   so no cached copy can go stale behind the user's back.
  */
 const DERIVED_FROM_DB = new Set(['getCompetitorProducts']);
-const SELF_REFETCH = new Set(['getReportById']);
+const SELF_REFETCH = new Set(['getReportById', 'getReportsPage']);
 
 /** Every read-only endpoint a page can ask the server for. */
 function readEndpoints(file) {

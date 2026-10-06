@@ -92,6 +92,9 @@ function clearInitialDataCache_() {
 // and its write was also wrapped in `catch(e){}`. Past ~100 KB the history page
 // stopped caching and re-read every linked sheet on every visit.
 const REPORTS_CACHE_KEY = 'allReports_v3_user_history';
+const REPORTS_PAGE_DEFAULT_SIZE_ = 20;
+const REPORTS_PAGE_MAX_SIZE_ = 50;
+
 function clearReportsCache_() {
   try { cacheClearChunked_(REPORTS_CACHE_KEY); } catch (e) {}
 }
@@ -403,6 +406,7 @@ function doGet(e) {
     switch (action) {
       case "getInitialData": response = getInitialData(e.parameter.forceRefresh === "1"); break;
       case "getReports": response = getReports(emp.id, emp.systemRole, emp.name, e.parameter.targetUserId); break;
+      case "getReportsPage": response = getReportsPage(emp.id, emp.systemRole, emp.name, e.parameter.targetUserId, e.parameter.page, e.parameter.pageSize); break;
       case "getReportById": response = getReportById(e.parameter.id, emp); break;
       case "findProductByBarcode": response = findProductByBarcode(e.parameter.barcode, e.parameter.campaign); break;
       case "getCompetitorProducts": response = getCompetitorProductsFromSheet(); break;
@@ -1139,15 +1143,16 @@ function getUsersLite() {
 // V42: مصدر الحقيقة لهرمية الفريق هو صفحة "Employees" وعمود (G / mgr) الذي يحوي
 // اسم المدير المباشر لكل موظف. نعيد خريطة: الاسم المطبّع -> اسم مديره المطبّع.
 function getEmployeeMgrMap() {
-  const sheet = aSheet.getSheetByName('Employees');
-  if (!sheet || sheet.getLastRow() < 2) return {};
-  const rows = sheet.getDataRange().getValues();
+  // getEmployeeAuthRows_() يستفيد من كاش Employees المستخدم أيضاً للمصادقة،
+  // وبالتالي لا نعيد قراءة الورقة نفسها كل مرة يبني فيها المدير قائمة فريقه.
+  const rows = getEmployeeAuthRows_();
+  if (!rows.length) return {};
   const map = {};
-  for (let i = 1; i < rows.length; i++) {
-    const name = String(rows[i][1] ?? '').trim();   // B = name
-    const mgr = String(rows[i][6] ?? '').trim();     // G = mgr
+  rows.forEach(row => {
+    const name = String(row[1] ?? '').trim();   // B = name
+    const mgr = String(row[6] ?? '').trim();     // G = mgr
     if (name) map[normalizeName_(name)] = normalizeName_(mgr);
-  }
+  });
   return map;
 }
 
@@ -1865,6 +1870,57 @@ function getReports(userId, userRole, userName, targetUserId) {
     const ownerName = String(r.createdByName || '').trim();
     return !!ownerName && allowedNameSet.has(normalizeName_(ownerName));
   });
+}
+
+/**
+ * صفحة تقارير خفيفة للـ History: تعيد فقط الدفعة المطلوبة بدل نقل كل الأرشيف
+ * إلى المتصفح في كل زيارة. تعتمد على getReports()، لذلك تستفيد من كاش التقارير
+ * الموجود مسبقاً، ومع وجود الكاش لا تُجرى أي قراءة جديدة من Sheets.
+ *
+ * البحث النصي المتقدم بقي في الواجهة للحفاظ على نفس السلوك القديم، بينما التصفح
+ * الافتراضي + فلتر الموظف يستخدمان هذا المسار الخفيف.
+ */
+function getReportsPage(userId, userRole, userName, targetUserId, page, pageSize) {
+  const rawPage = Number(page);
+  const rawSize = Number(pageSize);
+  const pageNumber = Number.isInteger(rawPage) && rawPage > 0 ? rawPage : 1;
+  const size = Number.isInteger(rawSize) && rawSize > 0
+    ? Math.min(rawSize, REPORTS_PAGE_MAX_SIZE_)
+    : REPORTS_PAGE_DEFAULT_SIZE_;
+
+  const rows = getReports(userId, userRole, userName, targetUserId);
+  const total = Array.isArray(rows) ? rows.length : 0;
+  // getReports يحتفظ بترتيب الصفوف كما هي في الشيت (الأقدم → الأحدث)، بينما
+  // شاشة السجل تعرض الأحدث أولاً. نُرتّب مرة واحدة في الذاكرة ثم نأخذ نافذة الصفحة.
+  const ordered = total ? rows.slice().reverse() : [];
+  const start = (pageNumber - 1) * size;
+  const items = ordered.slice(start, start + size);
+
+  // خيارات الفلاتر صغيرة جداً مقارنة بأرشيف التقارير، لذلك نعيدها مع أول صفحة
+  // بدل إجبار العميل على تنزيل كامل الأرشيف فقط لبناء قوائم الحملة/الحدث.
+  let filterOptions = null;
+  if (pageNumber === 1) {
+    const campaigns = new Set();
+    const events = new Set();
+    rows.forEach(r => {
+      if (r && r.campaign) campaigns.add(String(r.campaign));
+      if (r && r.event) events.add(String(r.event));
+    });
+    filterOptions = {
+      campaigns: Array.from(campaigns).sort(),
+      events: Array.from(events).sort()
+    };
+  }
+
+  return {
+    status: 'success',
+    page: pageNumber,
+    pageSize: size,
+    total,
+    hasMore: start + items.length < total,
+    items,
+    filterOptions
+  };
 }
 
 function getReportById(id, requester) {

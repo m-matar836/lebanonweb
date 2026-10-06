@@ -123,10 +123,21 @@ async function handleHistoryPage() {
     const HISTORY_PAGE_SIZE = 20;
     let historyLimit = HISTORY_PAGE_SIZE;
     let orderedReports = [];
+    let historyServerPage = 0;
+    let historyServerHasMore = false;
+    let historyServerLoading = false;
+    let historyServerRequestSeq = 0;
+    let historyServerPagedMode = true;
+    let historyFilterDataLoaded = false;
     const loadMoreReportsBtn = document.getElementById('loadMoreReportsBtn');
-    loadMoreReportsBtn?.addEventListener('click', () => {
-        historyLimit += HISTORY_PAGE_SIZE;
-        renderReportSlice();
+    loadMoreReportsBtn?.addEventListener('click', async () => {
+        if (!historyServerPagedMode) {
+            historyLimit += HISTORY_PAGE_SIZE;
+            renderReportSlice();
+            return;
+        }
+        if (historyServerLoading || !historyServerHasMore) return;
+        await loadHistoryServerPage(false);
     });
     const currentUser = JSON.parse(localStorage.getItem('currentUser')) || JSON.parse(sessionStorage.getItem('currentUser'));
     let currentReports = [];
@@ -199,12 +210,17 @@ async function handleHistoryPage() {
 
     // V70: تُعرَّف قبل renderReports لأنها تُستدعى منه — التعريف كـ const في
     // الأسفل كان يسبب ReferenceError (TDZ) عند أول رسم للشاشة.
-    function populateFilterOptions() {
+    function populateFilterOptions(source = currentReports, provided = null) {
         const campaigns = new Set(), events = new Set();
-        (Array.isArray(currentReports) ? currentReports : []).forEach(r => {
-            if (r.campaign) campaigns.add(String(r.campaign));
-            if (r.event) events.add(String(r.event));
-        });
+        if (provided) {
+            (provided.campaigns || []).forEach(v => campaigns.add(String(v)));
+            (provided.events || []).forEach(v => events.add(String(v)));
+        } else {
+            (Array.isArray(source) ? source : []).forEach(r => {
+                if (r.campaign) campaigns.add(String(r.campaign));
+                if (r.event) events.add(String(r.event));
+            });
+        }
         const rebuild = (select, values) => {
             if (!select) return;
             const prev = select.value;
@@ -220,20 +236,25 @@ async function handleHistoryPage() {
         rebuild(historyEventFilter, events);
     }
 
-    const renderReports = (reportsToRender) => {
+    const renderReports = (reportsToRender, options = {}) => {
         reportsAccordion.innerHTML = '';
-        populateFilterOptions();
-        const count = Array.isArray(reportsToRender) ? reportsToRender.length : 0;
+        if (options.filterOptions) populateFilterOptions(currentReports, options.filterOptions);
+        else populateFilterOptions();
+        const count = Number.isFinite(Number(options.total)) ? Number(options.total) : (Array.isArray(reportsToRender) ? reportsToRender.length : 0);
         if (reportsCount) reportsCount.textContent = `${count} تقرير${count === 1 ? '' : ''}`;
         if (!reportsToRender || reportsToRender.length === 0) {
             noResultsMessage.textContent = searchInput.value ? 'لا توجد تقارير تطابق بحثك.' : 'لا توجد تقارير محفوظة لعرضها.';
             noResultsMessage.classList.remove('d-none');
+            const wrap = document.getElementById('loadMoreReportsWrap');
+            if (wrap) wrap.classList.add('d-none');
             return;
         }
         noResultsMessage.classList.add('d-none');
-        orderedReports = (Array.isArray(reportsToRender) ? reportsToRender : []).slice().reverse();
-        historyLimit = HISTORY_PAGE_SIZE;
+        const list = Array.isArray(reportsToRender) ? reportsToRender : [];
+        orderedReports = options.alreadyOrdered ? list.slice() : list.slice().reverse();
+        historyLimit = options.keepLimit ? Math.min(historyLimit, orderedReports.length) : HISTORY_PAGE_SIZE;
         renderReportSlice();
+        if (options.total !== undefined && reportsCount) reportsCount.textContent = `${count} تقرير`;
     };
 
     const renderReportSlice = () => {
@@ -411,11 +432,11 @@ ${(isAdmin || isManager || isAuditor) && String(report.approvalStatus || '').tri
             });
         });
 
-        // V58: في الـ SPA يُوفَّر معرّف التمرير عبر sessionStorage عند التنقل من شاشة
-        // أخرى (زر «عرض التقرير» في التقارير). الرجوع إلى السلوك القديم إذا لم يوجد.
-        // V60: إظهار زر «عرض المزيد» عند وجود تقارير إضافية.
         const loadMoreWrap = document.getElementById('loadMoreReportsWrap');
-        if (loadMoreWrap) loadMoreWrap.classList.toggle('d-none', historyLimit >= orderedReports.length);
+        if (loadMoreWrap) {
+            const hasMore = historyServerPagedMode ? historyServerHasMore : historyLimit < orderedReports.length;
+            loadMoreWrap.classList.toggle('d-none', !hasMore);
+        }
         scrollToPendingReport();
     };
 
@@ -431,6 +452,53 @@ ${(isAdmin || isManager || isAuditor) && String(report.approvalStatus || '').tri
         return data;
     }
 
+
+    async function fetchReportsPageFromServer(targetId, page = 1) {
+        const params = {
+            userId: String(currentUser.id || ''),
+            role: String(currentUser.role || ''),
+            userName: String(currentUser.name || ''),
+            targetUserId: String(targetId || 'all'),
+            page: String(page),
+            pageSize: String(HISTORY_PAGE_SIZE)
+        };
+        // core.js يمنع تكرار طلب الصفحة نفسها عندما تحدث إعادة زيارة/تحديث سريع.
+        const data = await (typeof ajaxGetReportsPage === 'function'
+            ? ajaxGetReportsPage(params)
+            : apiGet('getReportsPage', params));
+        if (!data || data.status !== 'success' || !Array.isArray(data.items)) {
+            throw new Error(data?.message || 'استجابة غير صالحة من الخادم');
+        }
+        return data;
+    }
+
+    async function loadHistoryServerPage(reset = false, targetId = selectedTargetId) {
+        // يمكن لطلب إعادة الضبط (مثلاً عند تغيير الموظف) أن يبدأ أثناء جلب الصفحة
+        // الأولى؛ نُبطل الطلب الأقدم منطقياً، لكن نمنع تكرار طلب «عرض المزيد».
+        if (historyServerLoading && !reset) return;
+        historyServerLoading = true;
+        const requestSeq = ++historyServerRequestSeq;
+        try {
+            const page = reset ? 1 : historyServerPage + 1;
+            const data = await fetchReportsPageFromServer(targetId, page);
+            // عند تبديل الموظف بسرعة قد تصل استجابة الطلب السابق بعد الطلب الجديد؛
+            // تجاهلها حتى لا تعيد تقارير الموظف السابق إلى الشاشة.
+            if (requestSeq !== historyServerRequestSeq || String(targetId || 'all') !== String(selectedTargetId || 'all')) return;
+            const incoming = Array.isArray(data.items) ? data.items : [];
+            if (reset) currentReports = incoming;
+            else currentReports = currentReports.concat(incoming);
+            historyServerPage = Number(data.page) || page;
+            historyServerHasMore = !!data.hasMore;
+            historyServerPagedMode = true;
+            historyFilterDataLoaded = false;
+            renderReports(currentReports, { alreadyOrdered: true, keepLimit: true, total: data.total, filterOptions: data.filterOptions });
+            historyLimit = currentReports.length;
+            renderReportSlice();
+        } finally {
+            if (requestSeq === historyServerRequestSeq) historyServerLoading = false;
+        }
+    }
+
     // القائمة المنسدلة لاختيار موظف معيّن — admin يرى الجميع، manager يرى فريقه فقط.
     if (employeeFilterWrap && employeeFilterSelect) {
         const options = await fetchTeamOptions(currentUser);
@@ -442,23 +510,10 @@ ${(isAdmin || isManager || isAuditor) && String(report.approvalStatus || '').tri
             employeeFilterSelect.addEventListener('change', async () => {
                 selectedTargetId = employeeFilterSelect.value || 'all';
                 updateHistoryTitle();
+                historyFilterDataLoaded = false;
                 reportsAccordion.innerHTML = `<div class="text-center p-4"><i class="fa-solid fa-spinner fa-spin"></i></div>`;
-                if (selectedTargetId === 'all') {
-                    // الكل: نجلب نطاق الكل من الكاش/الخادم (cachedReportsFetch) بدل الاعتماد
-                    // على memoryReportsCache وحده الذي قد يكون فارغاً إذا ظهرت التقارير من كاش محلي.
-                    try {
-                        const all = await cachedReportsFetch(scopeForAll, { ttlMinutes: 2 });
-                        currentReports = Array.isArray(all) ? all : [];
-                        renderReports(currentReports);
-                    } catch (e) {
-                        currentReports = (typeof getMemoryReportsCache === 'function' ? getMemoryReportsCache() : memoryReportsCache) || [];
-                        renderReports(currentReports);
-                    }
-                    return;
-                }
                 try {
-                    currentReports = await fetchReportsFromServer(selectedTargetId);
-                    renderReports(currentReports);
+                    await loadHistoryServerPage(true, selectedTargetId);
                 } catch (e) {
                     reportsAccordion.innerHTML = `<div class="alert alert-danger">تعذر تحميل بيانات هذا الموظف.</div>`;
                 }
@@ -474,12 +529,14 @@ ${(isAdmin || isManager || isAuditor) && String(report.approvalStatus || '').tri
         : ((typeof readLegacyReportsCacheJSON === 'function') ? readLegacyReportsCacheJSON() : localStorage.getItem('reportsCache'));
     if (warmCache) {
         currentReports = warmCache;
+        historyServerPagedMode = false;
         renderReports(currentReports);
     } else if (cachedReportsJSON) {
         try {
             const allCachedReports = JSON.parse(cachedReportsJSON);
             if (Array.isArray(allCachedReports)) {
                 currentReports = allCachedReports;
+                historyServerPagedMode = false;
                 renderReports(currentReports);
             }
         } catch (e) {
@@ -529,6 +586,7 @@ ${(isAdmin || isManager || isAuditor) && String(report.approvalStatus || '').tri
     ].join(' ').toLowerCase();
     // V70: populateFilterOptions انتقل إلى أعلى الشاشة قبل renderReports.
     const refreshFilteredList = () => {
+        historyServerPagedMode = false;
         const term = String(searchInput.value || '').toLowerCase().trim();
         const idTerm = String(historyIdFilter?.value || '').trim().toLowerCase();
         const camp = historyCampaignFilter?.value || '';
@@ -560,23 +618,44 @@ ${(isAdmin || isManager || isAuditor) && String(report.approvalStatus || '').tri
         renderReports(trimmed);
     };
     let searchDebounceTimer = null;
+    const ensureFullFilterData = async () => {
+        if (historyFilterDataLoaded && !historyServerPagedMode) return true;
+        const full = await cachedReportsFetch(scopeForAll, { ttlMinutes: 2 });
+        currentReports = Array.isArray(full) ? full : [];
+        historyFilterDataLoaded = true;
+        historyServerPagedMode = false;
+        return true;
+    };
     const scheduleFilter = () => {
         ensureBarcodeMap();
         clearTimeout(searchDebounceTimer);
-        searchDebounceTimer = setTimeout(refreshFilteredList, 150);
+        searchDebounceTimer = setTimeout(async () => {
+            try {
+                await ensureFullFilterData();
+                refreshFilteredList();
+            } catch (e) {
+                failedReportsNotice(e?.message || e || 'تعذر تحميل البيانات للبحث');
+            }
+        }, 150);
+    };
+    const applySelectFilter = async () => {
+        try { await ensureFullFilterData(); refreshFilteredList(); }
+        catch (e) { failedReportsNotice(e?.message || e || 'تعذر تحميل البيانات للفلتر'); }
     };
     searchInput.addEventListener('input', scheduleFilter);
     historyIdFilter?.addEventListener('input', scheduleFilter);
-    historyCampaignFilter?.addEventListener('change', refreshFilteredList);
-    historyEventFilter?.addEventListener('change', refreshFilteredList);
-    historyStatusFilter?.addEventListener('change', refreshFilteredList);
-    clearHistoryFiltersBtn?.addEventListener('click', () => {
+    historyCampaignFilter?.addEventListener('change', applySelectFilter);
+    historyEventFilter?.addEventListener('change', applySelectFilter);
+    historyStatusFilter?.addEventListener('change', applySelectFilter);
+    clearHistoryFiltersBtn?.addEventListener('click', async () => {
         if (historyCampaignFilter) historyCampaignFilter.value = '';
         if (historyEventFilter) historyEventFilter.value = '';
         if (historyStatusFilter) historyStatusFilter.value = '';
         if (historyIdFilter) historyIdFilter.value = '';
         searchInput.value = '';
-        refreshFilteredList();
+        historyFilterDataLoaded = false;
+        try { await loadHistoryServerPage(true, selectedTargetId); }
+        catch (e) { failedReportsNotice(e?.message || e || 'تعذر تحميل السجل'); }
     });
 
     // V59: بدل انتظار الشبكة ثم إعادة بناء كل شيء، نعرض الكاش المخزّن فوراً عبر
@@ -598,7 +677,7 @@ ${(isAdmin || isManager || isAuditor) && String(report.approvalStatus || '').tri
     // V69: ربط مستمعي إعادة التحميل قبل الجلب الأول — لو فشل الجلب الأول (خطأ عابر أو
     // كاش قديم من سيرفر العمال) يبقى ضغط زر «تحديث البيانات» قادراً على إعادة ملء الشاشة.
     const applyReportsIfChanged = (data) => {
-        if (!Array.isArray(data) || selectedTargetId !== 'all') return;
+        if (!Array.isArray(data) || selectedTargetId !== 'all' || historyServerPagedMode) return;
         if (!sameReportSet(currentReports, data) || !currentReports.length) {
             currentReports = data;
             renderReports(currentReports);
@@ -615,6 +694,10 @@ ${(isAdmin || isManager || isAuditor) && String(report.approvalStatus || '').tri
     // بعد زر «تحديث البيانات»: نعرض التقارير المحدَّثة من الكاش المنسّق فوراً (دون شبكة إضافية).
     window.addEventListener('appDataRefreshed', async () => {
         try {
+            if (historyServerPagedMode) {
+                await loadHistoryServerPage(true, selectedTargetId);
+                return;
+            }
             const fresh = await cachedReportsFetch(scopeForAll);
             applyReportsIfChanged(fresh);
         } catch (e) { /* يبقى الكاش المعروض */ }
@@ -623,10 +706,8 @@ ${(isAdmin || isManager || isAuditor) && String(report.approvalStatus || '').tri
     let initialFetchRetries = 0;
     const initialFetchReports = async () => {
         try {
-            const fresh = await cachedReportsFetch(scopeForAll, { ttlMinutes: 2 });
-            applyReportsIfChanged(fresh);
+            await loadHistoryServerPage(true, selectedTargetId);
         } catch (e) {
-            // الكاش المعروض أصلاً يبقى ظاهراً؛ وإن لم يوجد كاش نعرض رسالة واضحة ونعيد المحاولة.
             if (!currentReports.length) failedReportsNotice(e?.message || e || 'خطأ في الاتصال');
             if (initialFetchRetries < 2) {
                 initialFetchRetries += 1;
@@ -641,10 +722,14 @@ ${(isAdmin || isManager || isAuditor) && String(report.approvalStatus || '').tri
     window.addEventListener('spaViewRevisited', async (event) => {
         if (event.detail && event.detail.route !== 'history') return;
         try {
-            const fresh = await cachedReportsFetch(scopeForAll, { force: true });
-            if (selectedTargetId === 'all' && !sameReportSet(currentReports, fresh)) {
-                currentReports = fresh;
-                renderReports(currentReports);
+            if (historyServerPagedMode) {
+                await loadHistoryServerPage(true, selectedTargetId);
+            } else {
+                const fresh = await cachedReportsFetch(scopeForAll, { force: true });
+                if (selectedTargetId === 'all' && !sameReportSet(currentReports, fresh)) {
+                    currentReports = fresh;
+                    renderReports(currentReports);
+                }
             }
         } catch (e) { /* يبقى الكاش المعروض ظاهراً */ }
         // V58: التنقل من التقارير (زر «عرض التقرير») — التمرير يعمل حتى لو كانت الشاشة مبنية

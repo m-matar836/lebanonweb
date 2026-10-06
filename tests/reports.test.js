@@ -42,6 +42,24 @@ test('getReports: a regular employee sees only their own reports', () => {
   assert.deepEqual(ids(u.get('getReports', { targetUserId: 'all' })), [1]);
 });
 
+test('getReportsPage: returns newest-first pages with total and hasMore', () => {
+  const u = asUser(setup(), 'admin1', 'pw-admin');
+  const p1 = u.get('getReportsPage', { targetUserId: 'all', page: 1, pageSize: 2 });
+  assert.equal(p1.status, 'success');
+  assert.equal(p1.total, 5);
+  assert.equal(p1.hasMore, true);
+  assert.deepEqual(p1.items.map(r => Number(r.id)), [5, 4]);
+  const p2 = u.get('getReportsPage', { targetUserId: 'all', page: 2, pageSize: 2 });
+  assert.deepEqual(p2.items.map(r => Number(r.id)), [3, 2]);
+});
+
+test('getReportsPage: regular employee scope cannot be widened by targetUserId', () => {
+  const u = asUser(setup(), 'user1', 'pw-user1');
+  const page = u.get('getReportsPage', { targetUserId: 'E004', page: 1, pageSize: 20 });
+  assert.equal(page.status, 'success');
+  assert.deepEqual(ids(page.items), [1]);
+});
+
 test('getReports: an admin sees every report', () => {
   const u = asUser(setup(), 'admin1', 'pw-admin');
   assert.deepEqual(ids(u.get('getReports', { targetUserId: 'all' })), [1, 2, 3, 4, 5]);
