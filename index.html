@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>تسجيل الدخول - لوحة التحكم</title>
+    <link rel="preconnect" href="https://script.google.com" crossorigin>
+    <link rel="preconnect" href="https://script.googleusercontent.com" crossorigin>
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
     <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
     <link rel="preconnect" href="https://code.jquery.com" crossorigin>
@@ -105,7 +107,8 @@
                             <a class="nav-link nav-link-movement" data-route="movement" href="#/movement"><i class="fa-solid fa-boxes-stacked me-1"></i>سحب / مرتجع مواد</a>
                         </li>
                         <li class="nav-item"><a class="nav-link nav-link-attendance" data-route="attendance" href="#/attendance"><i class="fa-solid fa-user-clock me-1"></i>الدوام</a></li>
-                        <li class="nav-item"><a class="nav-link nav-link-salary" data-route="salary" href="#/salary"><i class="fa-solid fa-hand-holding-dollar me-1"></i>السلف المالية</a></li>
+                        <li class="nav-item"><a class="nav-link nav-link-salary" data-route="salary" href="#/salary"><i class="fa-solid fa-hand-holding-dollar me-1"></i>السلف المالية</a></li>                               
+                        <!--<li class="nav-item"><a class="nav-link nav-link-complaints" data-route="complaints" href="#/complaints"><i class="fa-solid fa-comment-dots me-1"></i>شكاوي والملاحظات</a></li>-->
                         <li class="nav-item"><a class="nav-link nav-link-dashboard" data-route="dashboard" href="#/dashboard"><i class="fa-solid fa-chart-line me-1"></i>التحليلات</a></li>
 <li class="nav-item"><a class="nav-link nav-link-users" data-route="users" href="#/users" style="display:none;"><i class="fa-solid fa-users-gear me-1"></i>المستخدمون</a></li>
                     </ul>
@@ -355,7 +358,7 @@
 
                         <div id="draftStatus" class="auto-save-indicator small text-center mb-2" aria-live="polite"></div>
                         <div class="d-flex justify-content-center gap-2 mb-3 flex-wrap">
-                            <button type="button" id="restoreLastPointBtn" class="btn btn-sm btn-outline-info d-none"><i class="fa-solid fa-clock-rotate-left me-1"></i> استعادة آخر نقطة</button>
+                            <button type="button" id="restoreLastPointBtn" class="btn btn-sm btn-outline-info"><i class="fa-solid fa-clock-rotate-left me-1"></i> استعادة بيانات آخر نقطة</button>
                         </div>
                         <div class="text-center my-4 d-flex justify-content-center gap-2">
                             <button type="submit" class="btn btn-primary main-submit-btn"><i class="fa-solid fa-paper-plane"></i> إرسال التقرير</button>
@@ -1402,7 +1405,7 @@
                                     <div class="form-text">للقرض فقط. من 1 إلى 10 دفعات. اتركه فارغاً إن كان يُسدّد دفعة واحدة.</div>
                                 </div>
                                 <div class="mb-3">
-                                    <label class="form-label">المبلغ ($)</label>
+                                    <label class="form-label">المبلغ (ل.س)</label>
                                     <input type="number" id="salAmount" class="form-control" min="0" step="0.01" placeholder="0" required>
                                 </div>
                                 <div class="mb-3">
@@ -1493,7 +1496,55 @@
                 </div>
             </div>
         </section>
+<!-- ============ الشكاوي والملاحظات ============ -->
+        <section id="view-complaints" class="d-none">
+            <div class="page-hero">
+                <div class="page-hero-inner">
+                    <div class="page-hero-icon"><i class="fa-solid fa-comment-dots"></i></div>
+                    <div>
+                        <h1 class="page-hero-title">شكاوي والملاحظات</h1>
+                        <p class="page-hero-sub">اختر القسم الذي تريد فتحه</p>
+                    </div>
+                </div>
+            </div>
 
+            <div class="complaints-grid">
+                <a class="complaints-card" href="https://docs.google.com/forms/d/e/1FAIpQLSdGWNSx1pox-0_zlnP_2YzmB6BJGHmS0cnSuOjW5ro8usfwRg/viewform?usp=dialog" data-complaint-card="complaints-opinion">
+                    <img class="complaints-card-img" src="icons/complaints/change-mind-icon.png" style= "height:100% ;" alt="تبديل رأي" width="160" height="120" loading="lazy" decoding="async">
+                    <div class="complaints-card-body">
+                        <h2 class="complaints-card-title">تبديل رأي</h2>
+                        <p class="complaints-card-sub">سجّل ملاحظتك واطلب تغيير الرأي</p>
+                    </div>
+                    <span class="complaints-card-arrow"><i class="fa-solid fa-arrow-left"></i></span>
+                </a>
+
+                <a class="complaints-card" href="https://docs.google.com/forms/d/e/1FAIpQLSd9q7OhRCk61wfEJ6WlIFl_Uo4Y3zoha2KhXW0DpvvAjXWh-Q/viewform?usp=dialog" data-complaint-card="complaints-bean">
+                    <img class="complaints-card-img" src="icons/complaints/hamwi-note-icon.png" style= "height:100% ;" alt="ملاحظات البن" width="160" height="120" loading="lazy" decoding="async">
+                    <div class="complaints-card-body">
+                        <h2 class="complaints-card-title">ملاحظات البن</h2>
+                        <p class="complaints-card-sub">ملاحظات تخص البن والمنتجات</p>
+                    </div>
+                    <span class="complaints-card-arrow"><i class="fa-solid fa-arrow-left"></i></span>
+                </a>
+
+                <a class="complaints-card" href="https://docs.google.com/forms/d/e/1FAIpQLSe4_8EJ3hvFl7ugIq3_f-jFgi2BP6h056o3OnmOCHW7sdYsJQ/viewform?usp=dialog" data-complaint-card="complaints-site">
+                    <img class="complaints-card-img" src="icons/complaints/city-note-icon.png" style= "height:100% ;" alt="ملاحظات السيتي" loading="lazy" decoding="async">
+                    <div class="complaints-card-body">
+                        <h2 class="complaints-card-title">ملاحظات السيتي</h2>
+                        <p class="complaints-card-sub">ملاحظات تخص المشروبات الساخنة</p>
+                    </div>
+                    <span class="complaints-card-arrow"><i class="fa-solid fa-arrow-left"></i></span>
+                </a>
+                <a class="complaints-card" href="https://docs.google.com/forms/d/e/1FAIpQLSeCRSMIoH34u5MU-gSEHThf9iLpRLPyxVnh4TmKlF_CzJ4p6g/viewform?usp=dialog" data-complaint-card="complaints-site">
+                    <img class="complaints-card-img" src="icons/complaints/soup.png" style= "height:100% ;" alt="ملاحظات الريتشو" loading="lazy" decoding="async">
+                    <div class="complaints-card-body">
+                        <h2 class="complaints-card-title">ملاحظات الريتشو</h2>
+                        <p class="complaints-card-sub">ملاحظات تخص الريتشو</p>
+                    </div>
+                    <span class="complaints-card-arrow"><i class="fa-solid fa-arrow-left"></i></span>
+                </a>
+            </div>
+        </section>
         <!-- ============ نافذة مستخدم جديد / تعديل (V68) ============ -->
         <div class="modal fade" id="userModal" tabindex="-1" aria-labelledby="userModalLabel" aria-hidden="true">
             <div class="modal-dialog">

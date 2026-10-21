@@ -150,6 +150,7 @@ async function forceLogout(message) {
     localStorage.removeItem('appDB');
     localStorage.removeItem('dbCacheTimestamp');
     localStorage.removeItem(formStateKey());
+    localStorage.removeItem(ownerScopedKey('reportFormLastStateSavedAt'));
     sessionStorage.removeItem(reportToEditKey());
     invalidateSmartCaches();
     // إعادة ضبط حالة الشاشات مثل زر الخروج حتى لا تبقى بيانات مستخدم سابق.
@@ -163,7 +164,7 @@ async function forceLogout(message) {
     navigateTo('login');
 }
 
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxNwSaIier8BGDO9nrTcQa8EFJm9S0xsyJ-8uEDqCg2YPjgSKlhlbsIhgelngD6pZAh/exec";
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxNvlt5c-sN0AvroxfTODp4bNCoVh5_aGsPUtakfc8qMqte7FxNJauRJtFS8oXAKExZ/exec";
 const CACHE_DURATION_MINUTES = 1440;
 // V70: مسودّات المستخدم مربوطة بهويته. لو بقيت بمفتاح واحد لصاحب الجلسة
 // السابقة استعاد مستخدمٌ آخر مسودّة غيره (أو النقطة الأخيرة التي اختارها).
@@ -249,6 +250,7 @@ const USER_SCOPED_CACHE_PREFIXES = [
     'reportFormLastState', 'reportToEdit',
     'entryFeedSeen_v1::',
     'salaryAdvances::',
+    'userProductPrices::',
 ];
 
 /** يبني مفتاح كاش لا يشارك فيه إلا صاحب هذه الجلسة. */
@@ -920,19 +922,54 @@ function openOfflineDB() {
     });
 }
 
-async function queueReportOffline(reportData) {
+async function queueReportOffline(reportData, options = {}) {
     const db = await openOfflineDB();
+    const localId = `${reportData.id}_${Date.now()}`;
     return new Promise((resolve, reject) => {
         const tx = db.transaction(OFFLINE_QUEUE_STORE, 'readwrite');
         tx.objectStore(OFFLINE_QUEUE_STORE).put({
-            localId: `${reportData.id}_${Date.now()}`,
+            localId,
             reportData,
             createdAt: Date.now()
         });
-        tx.oncomplete = () => { db.close(); resolve(); registerBackgroundSync(); };
+        tx.oncomplete = () => {
+            db.close();
+            resolve(localId);
+            if (options.registerSync !== false) registerBackgroundSync();
+        };
         tx.onerror = () => { db.close(); reject(tx.error); };
     });
 }
+
+// اطلب من المتصفح إبقاء بيانات التطبيق المثبّت وقائمة المزامنة عند ضغط مساحة
+// التخزين. الطلب أفضل محاولة ولا يغيّر السلوك في المتصفحات التي لا تدعمه.
+let offlineStoragePersisted = false;
+let offlinePersistenceRequest = null;
+async function requestOfflineStoragePersistence() {
+    if (offlineStoragePersisted) return true;
+    if (offlinePersistenceRequest) return offlinePersistenceRequest;
+    offlinePersistenceRequest = (async () => {
+        try {
+            const storage = navigator.storage;
+            if (!storage || typeof storage.persist !== 'function') return false;
+            if (typeof storage.persisted === 'function' && await storage.persisted()) return true;
+            return await storage.persist();
+        } catch (e) {
+            return false;
+        }
+    })();
+    const result = await offlinePersistenceRequest;
+    offlineStoragePersisted = result === true;
+    // If a browser declined before the user interacted, allow one more request
+    // after a real gesture rather than treating that early decline as final.
+    if (!offlineStoragePersisted) offlinePersistenceRequest = null;
+    return offlineStoragePersisted;
+}
+// Request durable origin storage again after real user engagement. The first
+// DOMContentLoaded request is often too early for mobile browsers to grant it.
+['pointerdown', 'keydown'].forEach(type => {
+    document.addEventListener(type, () => { requestOfflineStoragePersistence(); }, { once: true, passive: true });
+});
 
 async function getPendingReports() {
     const db = await openOfflineDB();
@@ -1224,6 +1261,7 @@ pendingSyncTimer = setInterval(runPendingSyncIfNeeded, 300000);
 document.addEventListener('DOMContentLoaded', () => {
     setupCacheRefreshButtons();
     setupDataSyncTriggerButton();
+    requestOfflineStoragePersistence();
     setTimeout(() => { updateOfflineStatus(); syncPendingReports(); syncPendingAttendance(); syncPendingMovements(); }, 500);
 });
 
@@ -1239,7 +1277,11 @@ const SPA_ROUTES = {
     attendance: 'view-attendance',
     dashboard: 'view-dashboard',
     users: 'view-users',
-    salary: 'view-salary'
+    salary: 'view-salary',
+    complaints: 'view-complaints',
+    'complaints-opinion': 'view-complaints-opinion',
+    'complaints-bean': 'view-complaints-bean',
+    'complaints-site': 'view-complaints-site'
 };
 const SPA_TITLES = {
     login: 'تسجيل الدخول - لوحة التحكم',
@@ -1250,7 +1292,11 @@ const SPA_TITLES = {
     attendance: 'الدوام - لوحة التحكم',
     dashboard: 'التحليلات - لوحة التحكم',
     users: 'إدارة المستخدمين - لوحة التحكم',
-    salary: 'السلف المالية - لوحة التحكم'
+    salary: 'السلف المالية - لوحة التحكم',
+    complaints: 'شكاوي والملاحظات - لوحة التحكم',
+    'complaints-opinion': 'تبديل رأي - لوحة التحكم',
+    'complaints-bean': 'ملاحظات البن - لوحة التحكم',
+    'complaints-site': 'ملاحظات السيتي - لوحة التحكم'
 };
 const viewActivators = {};
 const viewMounted = {};
@@ -1336,6 +1382,7 @@ function bindShellUserControls() {
             localStorage.removeItem('appDB');
             localStorage.removeItem('dbCacheTimestamp');
             localStorage.removeItem(formStateKey());
+            localStorage.removeItem(ownerScopedKey('reportFormLastStateSavedAt'));
             sessionStorage.removeItem(reportToEditKey());
             invalidateSmartCaches();
             // V69: حذف لافتة إشعارات الرفض عند تسجيل الخروج.
@@ -1358,7 +1405,7 @@ function bindShellUserControls() {
     document.querySelectorAll('.nav-link-dashboard').forEach(el => { const it = el.closest('.nav-item'); if (it) it.style.display = showDashboard ? '' : 'none'; });
     // المروج يرى الدوام والسلف المالية، بينما تبقى الشاشات التشغيلية الأخرى مخفية.
     const isPromoter = isPromoterAccount(user);
-    document.querySelectorAll('.nav-link-reports, .nav-link-expenses, .nav-link-history, .nav-link-movement').forEach(el => { const it = el.closest('.nav-item'); if (it) it.style.display = isPromoter ? 'none' : ''; });
+    document.querySelectorAll('.nav-link-reports, .nav-link-expenses, .nav-link-history, .nav-link-movement, .nav-link-complaints').forEach(el => { const it = el.closest('.nav-item'); if (it) it.style.display = isPromoter ? 'none' : ''; });
     // V68: إدارة المستخدمين للإداري (admin) فقط — تُشغَّل بعد القاعدة أعلاه حتى لا يُعاد إظهارها لغير الإداري.
     document.querySelectorAll('.nav-link-users').forEach(el => { const it = el.closest('.nav-item'); if (it) it.style.display = role === 'admin' ? '' : 'none'; });
     shellControlsBound = true;
@@ -1671,9 +1718,8 @@ function clearServiceWorkerApiCache(timeoutMs = 3000) {
  * @param {object}  [opts]
  * @param {boolean} [opts.silent]         suppress the alert on failure
  * @param {boolean} [opts.refreshReports] also pull reports/attendance/movements.
- *   Defaults to true. Callers that only changed master data — e.g. a product
- *   price edit, which page-reports.js debounces at 120ms — pass false, otherwise
- *   every keystroke in the sales table re-downloaded the whole site.
+ *   Defaults to true. Personal product-price changes are saved by user and do
+ *   not trigger this whole-site refresh, avoiding repeated downloads while typing.
  */
 async function refreshAppCache({ silent = false, refreshReports = true } = {}) {
     if (cacheRefreshInProgress) return { ok: false, busy: true };
@@ -1698,6 +1744,9 @@ async function refreshAppCache({ silent = false, refreshReports = true } = {}) {
             requests.push(apiGet('getUserFestivalMovements',{userId:u,role:r,targetUserId:u}));
             requests.push(apiGet('getAttendance',{userId:u,role:r,userName:n,targetUserId:u}));
             requests.push(apiGet('getStatusOptions'));
+            // أسعار المنتجات الشخصية مستقلة عن بيانات Products المشتركة؛ تُحدّث
+            // عند طلب التحديث الكامل من دون تسريبها إلى كاش مستخدم آخر.
+            requests.push(apiGet('getUserProductPrices'));
         }
         const settled = await Promise.allSettled(requests);
         const first = settled[0];
@@ -1720,6 +1769,10 @@ async function refreshAppCache({ silent = false, refreshReports = true } = {}) {
         }
         const results = settled.map(s => s.status === 'fulfilled' ? s.value : null);
         if(currentUser && refreshReports && Array.isArray(results[1])) { const _uid = String(currentUser.id || currentUser.username || ''); saveReportsCacheEntry(reportsScopeKey({userId:_uid,role:currentUser.role,targetUserId:'all'}), results[1], {userId:_uid,targetUserId:'all'}); }
+        if (currentUser && refreshReports && results[6]?.status === 'success' && Array.isArray(results[6].prices)) {
+            try { localStorage.setItem(ownerScopedKey('userProductPrices'), JSON.stringify(results[6].prices)); }
+            catch (storageError) { console.warn('تعذر تحديث كاش الأسعار الشخصية محلياً:', storageError); }
+        }
         window.dispatchEvent(new CustomEvent('dbCacheRefreshed',{detail:freshDB}));
         window.dispatchEvent(new CustomEvent('reportsCacheInvalidated'));
         window.dispatchEvent(new CustomEvent('movementCacheInvalidated'));
@@ -1913,4 +1966,60 @@ function downloadTextFile(filename, content, mimeType) {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+}
+
+
+// نجمع الكروت عبر data attribute بدل الروابط: نص anchor قابل للتغيير،
+// لكن اسم الـ route في data-* هو ما يربطه بالراوت.
+// تعريف routes الشكاوى التي يشير إليها HTML (الملف المرفق لم يتضمن
+// التعريف الذي كان core.js يحتاجه عند الإقلاع).
+const COMPLAINTS_CARDS = [
+    { route: 'complaints-opinion', view: 'view-complaints-opinion', body: 'complaintsOpinionBody' },
+    { route: 'complaints-bean', view: 'view-complaints-bean', body: 'complaintsBeanBody' },
+    { route: 'complaints-site', view: 'view-complaints-site', body: 'complaintsSiteBody' }
+];
+
+function complaintsCardElements() {
+    return Array.prototype.slice.call(
+        document.querySelectorAll('#view-complaints [data-complaint-card]')
+    );
+}
+
+async function handleComplaintsPage() {
+    const view = document.getElementById('view-complaints');
+    if (!view) return;
+
+    // تشخيص wiring: كرت يشير إلى route غير معروف في core.js يظهر للمستخدم
+    // كصفحة فارغة دون أي خطأ في الـconsole، فنوقفه هنا بدل تركه مكسوراً.
+    const broken = complaintsCardElements().filter((el) => {
+        const target = el.getAttribute('data-complaint-card');
+        return !COMPLAINTS_CARDS.some((c) => c.route === target);
+    });
+    if (broken.length) {
+        console.warn('[complaints] بطاقات لا تقابل أي route معرّف:', broken.map((el) => el.getAttribute('data-complaint-card')));
+    }
+}
+
+// كل صفحة فرعية: نشغّلها هيكلاً فارغاً الآن، وربط البنية لاحقاً يكون بنفس
+// النمط المستخدم في بقية الصفحات (registerView + تحميل الكاش عند أول فتح).
+// الدالة نفسها ليست async عمداً: registerView يحتاج activator callable، ولو
+// صارت async لأعادت Promise وسُجّل كائناً لا دالة فلا تُنفَّذ الشاشة أصلاً.
+function handleComplaintsDestination(cfg) {
+    return async function () {
+        const view = document.getElementById(cfg.view);
+        // حارس: قد تصل hash قديمة أو شل مخبأ جزئياً. رمي خطأ هنا يكسر
+        // activateRoute لكل التنقلات التالية، فنكتفي بالصمت.
+        if (!view) return;
+        const body = document.getElementById(cfg.body);
+        if (body && !body.dataset.complaintsBound) {
+            body.dataset.complaintsBound = '1';
+        }
+    };
+}
+
+if (typeof registerView === 'function') {
+    registerView('complaints', handleComplaintsPage);
+    COMPLAINTS_CARDS.forEach((card) => {
+        registerView(card.route, handleComplaintsDestination(card));
+    });
 }

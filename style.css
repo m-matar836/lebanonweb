@@ -1583,6 +1583,7 @@ tbody tr td[colspan]::before {
     justify-content: center;
     font-size: 1.15rem;
     flex-shrink: 0;
+}
 /* ---------------------------------------------------------------- */
 /* 24. ورقة طباعة المصاريف — تصميم مستقل (A4 عمودي)                    */
 /* ---------------------------------------------------------------- */
@@ -2174,3 +2175,77 @@ tbody tr td[colspan]::before {
     .card-body { padding-block: .65rem; }
     .card-header { padding-block: .62rem; }
 }
+
+.complaints-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    gap: 1.1rem;
+    margin-top: 1.25rem;
+}
+.complaints-card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    text-decoration: none;
+    color: var(--text);
+    background: var(--card-bg, var(--surface));
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    box-shadow: 0 6px 18px -12px rgba(15, 23, 42, .35);
+    transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+}
+.complaints-card:hover,
+.complaints-card:focus-visible {
+    transform: translateY(-4px);
+    border-color: var(--primary);
+    box-shadow: var(--shadow-lg);
+}
+/* بؤرة واضحة لمستخدمي لوحة المفاتيح */
+.complaints-card:focus-visible {
+    outline: 3px solid var(--primary);
+    outline-offset: 3px;
+}
+.complaints-card-img {
+    width: 100%;
+    height: 130px;
+    object-fit: cover;
+    display: block;
+    background: var(--surface-2);
+}
+.complaints-card-body {
+    padding: .9rem 1rem 1.1rem;
+    text-align: center;
+}
+.complaints-card-title {
+    font-size: 1.05rem;
+    font-weight: 800;
+    margin: 0 0 .25rem;
+    color: var(--text);
+}
+.complaints-card-sub {
+    font-size: .84rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    margin: 0;
+}
+.complaints-card-arrow {
+    position: absolute;
+    inset-block-start: .6rem;
+    inset-inline-end: .6rem;
+    width: 34px;
+    height: 34px;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    color: #fff;
+    background: rgba(15, 23, 42, .55);
+    backdrop-filter: blur(4px);
+}
+.complaints-card:hover .complaints-card-arrow { background: var(--primary); }
+.complaints-back {
+    font-weight: 700;
+    color: var(--primary);
+    text-decoration: none;
+}
+.complaints-back:hover { text-decoration: underline; }

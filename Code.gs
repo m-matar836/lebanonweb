@@ -1,5 +1,5 @@
 // ===============================================================
-// Code.gs - updated to sync edited sales prices back to Products
+// Code.gs - per-user sales prices, report workflow, and data services
 // ===============================================================
 
 const aSheet = SpreadsheetApp.getActiveSpreadsheet();
@@ -292,7 +292,7 @@ function getDataSyncStatus() {
 // الآن يُصدر doLogin رمز token، وتتحقق كل دوال القراءة/الكتابة من الرمز ثم
 // تستخرج الهوية والدور من ملف Employees (المصدر الموثوق) — أي قيمة يرسلها
 // العميل لهوية/دور تُتجاهل وتُستبدل بقيمة الخادم.
-// مدة الجلسة: 6 ساعات (الحد الأقصى المسموح لـ ScriptCache TTL).
+// مدة الجلسة: دائمة منزلقة (سنة تتجدد مع الاستخدام) عبر PropertiesService؛ الكاش (6 ساعات) للمسار السريع فقط.
 // ===============================================================
 const SESSION_CACHE_PREFIX_ = 'sess_';
 const SESSION_DURATION_SECONDS_ = 6 * 60 * 60;
@@ -361,12 +361,79 @@ function getEmployeeByIdOrUsername_(value) {
   return null;
 }
 
-// إنشاء جلسة وإرجاع الـ token الجديد.
-function createSession_(employee) {
+// ---------------------------------------------------------------
+// V83: جلسة دائمة. كاش السكربت لا يحفظ أكثر من 6 ساعات، لذلك كانت الجلسة تسقط
+// ويُطلب الدخول من جديد رغم «تذكرني». الآن تُحفظ الجلسة أيضاً في
+// PropertiesService (تبقى بعد انتهاء الكاش) بمدة طويلة منزلقة: تتجدد مع الاستخدام.
+// المسار السريع لم يتغير — الكاش أولاً، ولا تُقرأ الخصائص إلا عند غياب الكاش.
+// ---------------------------------------------------------------
+const PERSISTENT_SESSION_PREFIX_ = 'psess_';
+const PERSISTENT_SESSION_MS_ = 365 * 24 * 60 * 60 * 1000;
+const PERSISTENT_SESSION_SLIDE_AFTER_MS_ = 12 * 60 * 60 * 1000;
+const PERSISTENT_SESSION_MAX_ = 1200;
+const PERSISTENT_SESSION_PURGE_KEY_ = 'psessPurgeMs';
+const PERSISTENT_SESSION_PURGE_EVERY_MS_ = 60 * 60 * 1000;
+
+function warmSessionCache_(token, employeeId, expiresAt, csrf) {
+  try { SESSION_STORE_.put(SESSION_CACHE_PREFIX_ + token, employeeId + '|' + expiresAt, SESSION_DURATION_SECONDS_); } catch (e) {}
+  if (csrf) { try { SESSION_STORE_.put('csrf_' + token, csrf, SESSION_DURATION_SECONDS_); } catch (e) {} }
+}
+
+function readPersistentSession_(token) {
+  try {
+    const raw = PropertiesService.getScriptProperties().getProperty(PERSISTENT_SESSION_PREFIX_ + token);
+    if (!raw) return null;
+    const rec = JSON.parse(raw);
+    if (!rec || !rec.u || !rec.e) return null;
+    return rec;
+  } catch (e) { return null; }
+}
+
+function writePersistentSession_(token, rec) {
+  try { PropertiesService.getScriptProperties().setProperty(PERSISTENT_SESSION_PREFIX_ + token, JSON.stringify(rec)); return true; }
+  catch (e) { return false; }
+}
+
+// تنظيف الجلسات المنتهية، ومنع تضخم التخزين (حد الخصائص ~500KB). مرة كل ساعة كحد أقصى.
+function purgePersistentSessions_() {
+  try {
+    const now = Date.now();
+    const last = Number(SESSION_STORE_.get(PERSISTENT_SESSION_PURGE_KEY_) || 0);
+    if (now - last < PERSISTENT_SESSION_PURGE_EVERY_MS_) return;
+    SESSION_STORE_.put(PERSISTENT_SESSION_PURGE_KEY_, String(now), 3600);
+    const props = PropertiesService.getScriptProperties();
+    const all = props.getProperties();
+    const live = [];
+    Object.keys(all).forEach(function (k) {
+      if (k.indexOf(PERSISTENT_SESSION_PREFIX_) !== 0) return;
+      let rec = null;
+      try { rec = JSON.parse(all[k]); } catch (e) {}
+      if (!rec || !rec.e || Number(rec.e) < now) { props.deleteProperty(k); return; }
+      live.push({ k: k, e: Number(rec.e) });
+    });
+    if (live.length > PERSISTENT_SESSION_MAX_) {
+      live.sort(function (a, b) { return a.e - b.e; });
+      live.slice(0, live.length - PERSISTENT_SESSION_MAX_).forEach(function (x) { props.deleteProperty(x.k); });
+    }
+  } catch (e) {}
+}
+
+// إنشاء جلسة وإرجاع الـ token الجديد. persistent=false يبقيها 6 ساعات فقط كالسابق.
+function createSession_(employee, persistent) {
   const token = Utilities.getUuid().replace(/-/g, '');
-  const expiresAt = Date.now() + SESSION_DURATION_SECONDS_ * 1000;
-  try { SESSION_STORE_.put(SESSION_CACHE_PREFIX_ + token, employee.id + '|' + expiresAt, SESSION_DURATION_SECONDS_); } catch (e) {}
-  return { token, expiresAt };
+  const keep = persistent !== false;
+  const expiresAt = Date.now() + (keep ? PERSISTENT_SESSION_MS_ : SESSION_DURATION_SECONDS_ * 1000);
+  warmSessionCache_(token, employee.id, expiresAt, '');
+  return { token, expiresAt, persistent: keep };
+}
+
+// يربط الـ csrf بالجلسة، ويحفظ السجل الدائم (يُستدعى بعد توليد csrf في doLogin).
+function finalizeSession_(session, employeeId, csrf) {
+  warmSessionCache_(session.token, employeeId, session.expiresAt, csrf);
+  if (session.persistent) {
+    writePersistentSession_(session.token, { u: employeeId, e: session.expiresAt, c: csrf });
+    purgePersistentSessions_();
+  }
 }
 
 // إنهاء الجلسة فوراً (زر خروج) — لا يصلح الـ token بعدها.
@@ -374,6 +441,23 @@ function revokeSession_(token) {
   const t = String(token || '').trim();
   if (!t) return;
   try { SESSION_STORE_.remove(SESSION_CACHE_PREFIX_ + t); } catch (e) {}
+  try { SESSION_STORE_.remove('csrf_' + t); } catch (e) {}
+  try { PropertiesService.getScriptProperties().deleteProperty(PERSISTENT_SESSION_PREFIX_ + t); } catch (e) {}
+}
+
+// قيمة csrf الصحيحة للجلسة: من الكاش، وإلا من السجل الدائم.
+function getSessionCsrf_(token) {
+  const t = String(token || '').trim();
+  if (!t) return null;
+  let v = null;
+  try { v = SESSION_STORE_.get('csrf_' + t); } catch (e) {}
+  if (v) return v;
+  const rec = readPersistentSession_(t);
+  if (rec && rec.c && Number(rec.e) > Date.now()) {
+    try { SESSION_STORE_.put('csrf_' + t, rec.c, SESSION_DURATION_SECONDS_); } catch (e) {}
+    return rec.c;
+  }
+  return null;
 }
 
 // تحويل token صالح إلى كائن الموظف الموثّق — أي طلب بلا token أو بجلسة منتهية يُرفض.
@@ -382,7 +466,23 @@ function authenticateRequest_(token) {
   if (!t) throw unauthorizedError_('لا توجد جلسة دخول — سجّل الدخول أولاً');
   let entry = null;
   try { entry = SESSION_STORE_.get(SESSION_CACHE_PREFIX_ + t); } catch (e) {}
-  if (!entry) throw unauthorizedError_('انتهت الجلسة أو غير صالحة — سجّل الدخول مجدداً');
+  if (!entry) {
+    // V83: انتهى الكاش (6 ساعات) — نبحث عن الجلسة الدائمة قبل الرفض.
+    const rec = readPersistentSession_(t);
+    if (!rec) throw unauthorizedError_('انتهت الجلسة أو غير صالحة — سجّل الدخول مجدداً');
+    const now = Date.now();
+    if (Number(rec.e) < now) {
+      try { PropertiesService.getScriptProperties().deleteProperty(PERSISTENT_SESSION_PREFIX_ + t); } catch (e) {}
+      throw unauthorizedError_('انتهت مدة الجلسة — سجّل الدخول مجدداً');
+    }
+    // تمديد منزلق: كل استخدام يجدد السنة، بكتابة واحدة على الأكثر كل 12 ساعة.
+    if (Number(rec.e) - now < PERSISTENT_SESSION_MS_ - PERSISTENT_SESSION_SLIDE_AFTER_MS_) {
+      rec.e = now + PERSISTENT_SESSION_MS_;
+      writePersistentSession_(t, rec);
+    }
+    warmSessionCache_(t, rec.u, rec.e, rec.c);
+    entry = rec.u + '|' + rec.e;
+  }
   const parts = String(entry).split('|');
   if (Number(parts[1]) < Date.now()) {
     try { SESSION_STORE_.remove(SESSION_CACHE_PREFIX_ + t); } catch (e) {}
@@ -405,6 +505,7 @@ function doGet(e) {
     let response;
     switch (action) {
       case "getInitialData": response = getInitialData(e.parameter.forceRefresh === "1"); break;
+      case "getUserProductPrices": response = getUserProductPrices(emp.id); break;
       case "getReports": response = getReports(emp.id, emp.systemRole, emp.name, e.parameter.targetUserId); break;
       case "getReportsPage": response = getReportsPage(emp.id, emp.systemRole, emp.name, e.parameter.targetUserId, e.parameter.page, e.parameter.pageSize); break;
       case "getReportById": response = getReportById(e.parameter.id, emp); break;
@@ -450,9 +551,7 @@ function doPost(e) {
       const emp = authenticateRequest_(raw.token);
       // CSRF protection: verify the request originates from our app
       const csrfToken = raw.csrfToken;
-      const sessionCsrfKey = 'csrf_' + raw.token;
-      let validCsrf = null;
-      try { validCsrf = SESSION_STORE_.get(sessionCsrfKey); } catch (e) {}
+      const validCsrf = getSessionCsrf_(raw.token);
       if (!validCsrf || validCsrf !== csrfToken) {
         throw unauthorizedError_('CSRF token invalid or missing');
       }
@@ -473,7 +572,11 @@ function doPost(e) {
 
       switch (action) {
         case "submitReport":
-          response = handleReportSubmission(payload);
+          response = handleReportSubmission(payload, emp.id);
+          break;
+
+        case "saveUserProductPrice":
+          response = saveUserProductPriceForUser_(emp.id, payload);
           break;
 
         case "addLocation":
@@ -1061,10 +1164,11 @@ function doLogin(payload) {
     const rawUsername = String(row[2] || '').trim();
     resetLoginAttempts_(inputUsernameLower);
     // V67: إنشاء جلسة وإرجاع الـ token — كل الطلبات اللاحقة تتطلب هذا الـ token.
-    const session = createSession_({ id: rawId || rawUsername });
+    // V83: الجلسة دائمة افتراضياً؛ العميل يرسل remember=false فقط إذا ألغى «تذكرني».
+    const session = createSession_({ id: rawId || rawUsername }, payload.remember !== false);
     // CSRF: generate and store a CSRF token tied to this session
     const csrfToken = Utilities.getUuid().replace(/-/g, '');
-    try { SESSION_STORE_.put('csrf_' + session.token, csrfToken, SESSION_DURATION_SECONDS_); } catch (e) {}
+    finalizeSession_(session, rawId || rawUsername, csrfToken);
     // V74: استجابة الدخول صغيرة عمداً. لا نرسل getInitialData (قد تكون مئات الكيلوبايت)
     // داخل طلب المصادقة؛ الشاشة الهدف تقرأ كاش المتصفح أو تجلب البيانات مباشرة بعد الدخول.
     return {status:"success", token: session.token, csrfToken: csrfToken, expiresAt: session.expiresAt, user:{
@@ -1575,6 +1679,214 @@ function updateProductPrice(payload) {
   return {status:'success', updated:matches, price:price, cacheRefreshed:true};
 }
 
+// ============================================================================
+// أسعار خاصة بكل مستخدم — لا تُعدّل ورقة Products المشتركة عند إدخال تقرير.
+// المفتاح المنطقي: userId + campaign + product. السعر الأساسي يبقى في Products،
+// وأول استعمال يأخذ السعر الأساسي، ثم يُحفظ تعديل المستخدم في UserProductPrices.
+// ============================================================================
+const USER_PRODUCT_PRICES_SHEET_NAME_ = 'UserProductPrices';
+const USER_PRODUCT_PRICES_HEADERS_ = ['userId', 'campaign', 'product', 'barcode', 'price', 'updatedAt'];
+const USER_PRODUCT_PRICES_CACHE_TTL_ = 300;
+
+function userProductPricesCacheKey_(userId) {
+  const encoded = Utilities.base64EncodeWebSafe(String(userId || '')).replace(/=+$/g, '').slice(0, 160);
+  return 'userProductPrices_v1_' + encoded;
+}
+
+function clearUserProductPricesCache_(userId) {
+  try { cache.remove(userProductPricesCacheKey_(userId)); } catch (e) {}
+}
+
+function userProductPriceScopePart_(value) {
+  return String(value == null ? '' : value).trim().toLocaleLowerCase();
+}
+
+function userProductPriceScopeKey_(campaign, product) {
+  return userProductPriceScopePart_(campaign) + '\u0000' + userProductPriceScopePart_(product);
+}
+
+function getUserProductPricesSheet_(createIfMissing) {
+  let sheet = aSheet.getSheetByName(USER_PRODUCT_PRICES_SHEET_NAME_);
+  if (!sheet && createIfMissing) sheet = aSheet.insertSheet(USER_PRODUCT_PRICES_SHEET_NAME_);
+  if (!sheet) return null;
+
+  let lastColumn = sheet.getLastColumn();
+  if (sheet.getLastRow() === 0 || lastColumn === 0) {
+    sheet.getRange(1, 1, 1, USER_PRODUCT_PRICES_HEADERS_.length).setValues([USER_PRODUCT_PRICES_HEADERS_]);
+    lastColumn = USER_PRODUCT_PRICES_HEADERS_.length;
+  } else {
+    let headers = sheet.getRange(1, 1, 1, lastColumn).getValues()[0];
+    const normalized = headers.map(normalizeHeaderName);
+    const missing = USER_PRODUCT_PRICES_HEADERS_.filter(h => !normalized.includes(normalizeHeaderName(h)));
+    if (missing.length) {
+      sheet.getRange(1, lastColumn + 1, 1, missing.length).setValues([missing]);
+      lastColumn += missing.length;
+      headers = sheet.getRange(1, 1, 1, lastColumn).getValues()[0];
+    }
+  }
+
+  const headers = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), USER_PRODUCT_PRICES_HEADERS_.length)).getValues()[0];
+  const cols = {
+    userId: getColumnIndex(headers, ['userId', 'user id', 'معرف المستخدم', 'معرّف المستخدم'], 0),
+    campaign: getColumnIndex(headers, ['campaign', 'الحملة'], 1),
+    product: getColumnIndex(headers, ['product', 'المادة', 'اسم المادة'], 2),
+    barcode: getColumnIndex(headers, ['barcode', 'باركود', 'الباركود'], 3),
+    price: getColumnIndex(headers, ['price', 'السعر'], 4),
+    updatedAt: getColumnIndex(headers, ['updatedAt', 'updated at', 'تاريخ التحديث'], 5)
+  };
+  return { sheet, headers, cols };
+}
+
+function getUserProductPrices(userId) {
+  const uid = String(userId || '').trim();
+  if (!uid) throw new Error('تعذر تحديد المستخدم الحالي لقراءة أسعاره');
+
+  const cacheKey = userProductPricesCacheKey_(uid);
+  try {
+    const cached = cache.get(cacheKey);
+    if (cached) {
+      const prices = JSON.parse(cached);
+      if (Array.isArray(prices)) return { status: 'success', prices };
+    }
+  } catch (e) {}
+
+  const info = getUserProductPricesSheet_(false);
+  if (!info || info.sheet.getLastRow() < 2) return { status: 'success', prices: [] };
+
+  const { sheet, headers, cols } = info;
+  const lastRow = sheet.getLastRow();
+  const rows = sheet.getRange(2, 1, lastRow - 1, headers.length).getValues();
+  const prices = [];
+  rows.forEach(row => {
+    if (String(row[cols.userId] || '').trim() !== uid) return;
+    const campaign = String(row[cols.campaign] || '').trim();
+    const product = String(row[cols.product] || '').trim();
+    const price = Number(row[cols.price]);
+    if (!campaign || !product || !Number.isFinite(price) || price < 0) return;
+    prices.push({
+      campaign,
+      product,
+      barcode: String(row[cols.barcode] || '').trim(),
+      price,
+      updatedAt: row[cols.updatedAt] || ''
+    });
+  });
+  try { cache.put(cacheKey, JSON.stringify(prices), USER_PRODUCT_PRICES_CACHE_TTL_); } catch (e) {}
+  return { status: 'success', prices };
+}
+
+function upsertUserProductPrices_(userId, entries) {
+  const uid = String(userId || '').trim();
+  if (!uid) throw new Error('تعذر تحديد المستخدم الحالي لحفظ أسعاره');
+  const deduped = new Map();
+  (Array.isArray(entries) ? entries : []).forEach(entry => {
+    const campaign = String(entry && entry.campaign || '').trim();
+    const product = String(entry && entry.product || '').trim();
+    const price = Number(entry && entry.price);
+    if (!campaign || !product || !Number.isFinite(price) || price < 0) return;
+    const barcode = String(entry && entry.barcode || '').trim();
+    deduped.set(userProductPriceScopeKey_(campaign, product), { campaign, product, barcode, price });
+  });
+  if (!deduped.size) return 0;
+
+  // منع طلب حفظين متزامنين من إنشاء صفّين للمفتاح نفسه على Google Sheets.
+  let lock = null;
+  try {
+    if (typeof LockService !== 'undefined' && LockService.getScriptLock) {
+      lock = LockService.getScriptLock();
+      lock.waitLock(10000);
+    }
+  } catch (e) {
+    if (lock) throw e;
+    lock = null;
+  }
+
+  try {
+    const info = getUserProductPricesSheet_(true);
+    const { sheet, headers, cols } = info;
+    const lastRow = sheet.getLastRow();
+    const rows = lastRow > 1 ? sheet.getRange(2, 1, lastRow - 1, headers.length).getValues() : [];
+    const existingByKey = new Map();
+    rows.forEach((row, index) => {
+      if (String(row[cols.userId] || '').trim() !== uid) return;
+      const key = userProductPriceScopeKey_(row[cols.campaign], row[cols.product]);
+      if (!existingByKey.has(key)) existingByKey.set(key, index);
+    });
+
+    const now = new Date();
+    const appendRows = [];
+    let saved = 0;
+    deduped.forEach((entry, key) => {
+      const existingIndex = existingByKey.get(key);
+      let row;
+      if (existingIndex !== undefined) {
+        row = rows[existingIndex].slice();
+      } else {
+        row = new Array(headers.length).fill('');
+      }
+      row[cols.userId] = uid;
+      row[cols.campaign] = entry.campaign;
+      row[cols.product] = entry.product;
+      row[cols.barcode] = entry.barcode;
+      row[cols.price] = entry.price;
+      row[cols.updatedAt] = now;
+      if (existingIndex !== undefined) {
+        // Only the matching user's row is changed. Rows belonging to every other
+        // user are never written back as a whole-sheet range.
+        sheet.getRange(existingIndex + 2, 1, 1, headers.length).setValues([row]);
+      } else {
+        appendRows.push(row);
+      }
+      saved++;
+    });
+    if (appendRows.length) {
+      const firstAppendRow = sheet.getLastRow() + 1;
+      sheet.getRange(firstAppendRow, 1, appendRows.length, headers.length).setValues(appendRows);
+    }
+    SpreadsheetApp.flush();
+    clearUserProductPricesCache_(uid);
+    return saved;
+  } finally {
+    if (lock) {
+      try { lock.releaseLock(); } catch (e) {}
+    }
+  }
+}
+
+function saveUserProductPriceForUser_(userId, payload) {
+  payload = payload || {};
+  const campaign = String(payload.campaign || '').trim();
+  const product = String(payload.product || '').trim();
+  const price = Number(payload.price);
+  if (!campaign) throw new Error('نوع الحملة مطلوب لحفظ السعر الشخصي');
+  if (!product) throw new Error('اسم المادة مطلوب لحفظ السعر الشخصي');
+  if (!Number.isFinite(price) || price < 0) throw new Error('السعر غير صالح');
+  const updated = upsertUserProductPrices_(userId, [{
+    campaign,
+    product,
+    barcode: String(payload.barcode || '').trim(),
+    price
+  }]);
+  return { status: 'success', updated, campaign, product, price, personal: true };
+}
+
+function saveUserProductPricesFromReport_(reportData, authenticatedUserId) {
+  reportData = reportData || {};
+  // «ترويج وبيع مباشر» مصدره Products المشتركة، فلا تجعل سعر التقرير الشخصي
+  // الافتراضي للفعاليات الأخرى.
+  if (String(reportData.event || '').trim() === 'ترويج وبيع مباشر') return 0;
+  const userId = String(authenticatedUserId || reportData.userId || reportData.createdById || '').trim();
+  const defaultCampaign = String(reportData.campaign || '').trim();
+  const sales = Array.isArray(reportData.sales) ? reportData.sales : [];
+  const entries = sales.map(sale => ({
+    campaign: String(sale && sale.campaign || defaultCampaign).trim(),
+    product: String(sale && (sale.product || sale.name) || '').trim(),
+    barcode: String(sale && sale.barcode || '').trim(),
+    price: sale && sale.price
+  }));
+  return upsertUserProductPrices_(userId, entries);
+}
+
 function refreshCache() {
   clearInitialDataCache_();
   clearReportsCache_();
@@ -1635,7 +1947,7 @@ const REPORT_SERVER_OWNED_COLUMNS = [
   'photo', 'signature',
   'deletedAt', 'deletedBy'
 ];
-function handleReportSubmission(reportData) {
+function handleReportSubmission(reportData, authenticatedUserId) {
   reportData = reportData || {};
   ensureReportsColumn('createdById');
   ensureReportsColumn('createdByName');
@@ -1697,6 +2009,10 @@ function handleReportSubmission(reportData) {
 
   const newRow = headers.map(header => reportData[header] === undefined ? '' : (Array.isArray(reportData[header]) ? JSON.stringify(reportData[header]) : reportData[header]));
 
+  // Prices entered in the report become the current user's defaults only; never
+  // write them back to the shared Products sheet from a report submission.
+  saveUserProductPricesFromReport_(reportData, authenticatedUserId);
+
   if (existingRowIndex !== -1) {
     reportsSheet.getRange(existingRowIndex+2,1,1,newRow.length).setValues([newRow]);
     clearReportDetails(reportId);
@@ -1705,7 +2021,6 @@ function handleReportSubmission(reportData) {
   }
 
   addReportDetails(reportData);
-  updateProductPrices(reportData);
   syncReportExpensesToFestivalMovement(reportData);
   clearInitialDataCache_();
   clearReportsCache_();
@@ -3584,4 +3899,29 @@ function getSalaryAdvances(requester) {
     advances = advances.filter(a => String(a.employeeId).trim() === requesterId);
   }
   return { status: 'success', advances };
+}
+
+// ===============================================================
+// V83: تسخين السكربت — يقلل «البداية الباردة» لـ Apps Script (أبطأ جزء في أول طلب).
+// اختياري: شغّل installKeepWarmTrigger() مرة واحدة من محرر Apps Script.
+// لإيقافه شغّل removeKeepWarmTrigger(). لا يغيّر أي بيانات.
+// ===============================================================
+function keepWarm_() {
+  try { getEmployeeAuthRows_(); } catch (e) {}
+  try { warmInitialDataCache_(); } catch (e) {}
+}
+
+function installKeepWarmTrigger() {
+  ScriptApp.getProjectTriggers()
+    .filter(t => t.getHandlerFunction() === 'keepWarm_')
+    .forEach(t => ScriptApp.deleteTrigger(t));
+  ScriptApp.newTrigger('keepWarm_').timeBased().everyMinutes(5).create();
+  return { status: 'success', message: 'تم تفعيل تسخين السكربت كل 5 دقائق.' };
+}
+
+function removeKeepWarmTrigger() {
+  ScriptApp.getProjectTriggers()
+    .filter(t => t.getHandlerFunction() === 'keepWarm_')
+    .forEach(t => ScriptApp.deleteTrigger(t));
+  return { status: 'success', message: 'تم إيقاف تسخين السكربت.' };
 }
