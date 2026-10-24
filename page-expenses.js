@@ -598,7 +598,7 @@ const prPrintedAt = document.getElementById('prPrintedAt');
         </table>
         <div class="exp-print-total-row">
             <span class="exp-print-total-label">الإجمالي</span>
-            <span class="exp-print-total-words">${esc2(amountInArabicWords(total))} ل.س</span>
+            <span class="exp-print-total-words">${esc2(amountInArabicWords(total))} $</span>
             <span class="exp-print-total-value">${esc2(money(total))}</span>
         </div>
         </body></html>`);
