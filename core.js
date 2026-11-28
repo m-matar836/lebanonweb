@@ -164,7 +164,7 @@ async function forceLogout(message) {
     navigateTo('login');
 }
 
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxC4rw62_HsXM7C0lxPgGmX2v50yJTLpEdVmNRvatSZqqy8oUU2iX6PLXRgQ5A7M1Yt/exec";
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwX-GfRgdLUgIg1G1r8ASpf5Hixh19p7sBE2R41oboEnA53fr2JQkzoNH6-IyM_dq5e/exec";
 const CACHE_DURATION_MINUTES = 1440;
 // V70: مسودّات المستخدم مربوطة بهويته. لو بقيت بمفتاح واحد لصاحب الجلسة
 // السابقة استعاد مستخدمٌ آخر مسودّة غيره (أو النقطة الأخيرة التي اختارها).
